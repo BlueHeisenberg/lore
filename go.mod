@@ -7,6 +7,7 @@ replace github.com/BlueHeisenberg/agentmesh => D:\Projects\agentmesh
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
+	github.com/mark3labs/mcp-go v0.20.1
 	golang.org/x/crypto v0.39.0
 	modernc.org/sqlite v1.38.0
 )
@@ -16,6 +17,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	modernc.org/libc v1.65.10 // indirect

@@ -1,0 +1,391 @@
+package mcpserver
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	mcplib "github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/BlueHeisenberg/lore/internal/space"
+	"github.com/BlueHeisenberg/lore/internal/store"
+)
+
+// ----------------------------------------------------------------------------
+// Arg helpers (mcp-go v0.20.x: Arguments is map[string]any)
+// ----------------------------------------------------------------------------
+
+func argString(req mcplib.CallToolRequest, key string) string {
+	v, _ := req.Params.Arguments[key].(string)
+	return strings.TrimSpace(v)
+}
+
+func argInt(req mcplib.CallToolRequest, key string, def int) int {
+	if v, ok := req.Params.Arguments[key].(float64); ok {
+		return int(v)
+	}
+	return def
+}
+
+func argBool(req mcplib.CallToolRequest, key string) bool {
+	v, _ := req.Params.Arguments[key].(bool)
+	return v
+}
+
+func textResult(s string) (*mcplib.CallToolResult, error) {
+	return mcplib.NewToolResultText(s), nil
+}
+
+func errResult(format string, a ...any) (*mcplib.CallToolResult, error) {
+	return mcplib.NewToolResultError(fmt.Sprintf(format, a...)), nil
+}
+
+// ----------------------------------------------------------------------------
+// Shared lookups
+// ----------------------------------------------------------------------------
+
+// resolveSpace maps a space name or id (empty/"personal" = personal space).
+func (s *Server) resolveSpace(arg string) (store.Space, error) {
+	if arg == "" || arg == "personal" {
+		return s.st.PersonalSpace()
+	}
+	if sp, err := s.st.GetSpace(arg); err == nil {
+		return sp, nil
+	}
+	return s.st.SpaceByName(arg)
+}
+
+// cwdProjectSpace returns the project space for the process CWD, or zero
+// Space if the CWD is not in a git project or no space exists for it.
+func (s *Server) cwdProjectSpace() (store.Space, bool) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return store.Space{}, false
+	}
+	ref, err := space.FindProjectRef(cwd)
+	if err != nil {
+		return store.Space{}, false
+	}
+	sp, err := s.st.SpaceByProjectRef(ref)
+	if err != nil {
+		return store.Space{}, false
+	}
+	return sp, true
+}
+
+// defaultScope is the retrieval default: personal + CWD project + pinned.
+func (s *Server) defaultScope() []string {
+	var ids []string
+	if p, err := s.st.PersonalSpace(); err == nil {
+		ids = append(ids, p.SpaceID)
+	}
+	if sp, ok := s.cwdProjectSpace(); ok {
+		ids = append(ids, sp.SpaceID)
+	}
+	if sps, err := s.st.ListSpaces(); err == nil {
+		for _, sp := range sps {
+			if sp.Pinned && !containsStr(ids, sp.SpaceID) {
+				ids = append(ids, sp.SpaceID)
+			}
+		}
+	}
+	return ids
+}
+
+func containsStr(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) spaceNames() map[string]string {
+	names := map[string]string{}
+	if sps, err := s.st.ListSpaces(); err == nil {
+		for _, sp := range sps {
+			names[sp.SpaceID] = sp.Name
+		}
+	}
+	return names
+}
+
+// normalizeMarkers turns "context, non-negotiable" into ["[CONTEXT]","[NON-NEGOTIABLE]"].
+func normalizeMarkers(csv string) []string {
+	if csv == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(csv, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			if !strings.HasPrefix(p, "[") {
+				p = "[" + strings.ToUpper(p) + "]"
+			}
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// userModelDomain mirrors the store's rule: profile/ and feedback/ layers
+// are the user model and never leave the personal space.
+func userModelDomain(domain string) bool {
+	layer, _, _ := strings.Cut(domain, "/")
+	return layer == "profile" || layer == "feedback"
+}
+
+// renderEntry writes the full entry: title, one metadata line, body.
+func renderEntry(b *strings.Builder, e store.Entry, spaceName string) {
+	fmt.Fprintf(b, "# %s\n", e.Title)
+	meta := fmt.Sprintf("id %s (v%d) | space %s | domain %s | %s | origin %s",
+		e.EntryID, e.Version, spaceName, e.Domain, e.Confidence, e.Origin)
+	if len(e.Markers) > 0 {
+		meta += " | " + strings.Join(e.Markers, " ")
+	}
+	if e.Provenance != nil {
+		meta += fmt.Sprintf(" | copied from %s", e.Provenance.SourceEntry)
+	}
+	meta += " | updated " + e.UpdatedAt
+	b.WriteString(meta + "\n")
+	if body := strings.TrimRight(e.Body, "\n"); body != "" {
+		b.WriteString("\n" + body + "\n")
+	}
+}
+
+// ----------------------------------------------------------------------------
+// lore_search
+// ----------------------------------------------------------------------------
+
+func (s *Server) handleSearch(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	query := argString(req, "query")
+	if query == "" {
+		return errResult("`query` is required")
+	}
+	scope := argString(req, "scope")
+	spaceArg := argString(req, "space")
+
+	var spaces []string
+	switch {
+	case spaceArg != "":
+		sp, err := s.resolveSpace(spaceArg)
+		if err != nil {
+			return errResult("unknown space %q (try lore_spaces)", spaceArg)
+		}
+		spaces = []string{sp.SpaceID}
+	case scope == "all":
+		// no space filter
+	case scope == "project":
+		sp, ok := s.cwdProjectSpace()
+		if !ok {
+			return textResult("no results: the current directory has no project space (scope=project)")
+		}
+		spaces = []string{sp.SpaceID}
+	default:
+		spaces = s.defaultScope()
+	}
+
+	results, err := s.st.Search(query, store.SearchOpts{
+		Spaces:     spaces,
+		Domain:     argString(req, "domain"),
+		Marker:     argString(req, "marker"),
+		Confidence: argString(req, "confidence"),
+		Limit:      argInt(req, "limit", 8),
+	})
+	if err != nil {
+		return errResult("search: %v", err)
+	}
+	if len(results) == 0 {
+		return textResult(fmt.Sprintf("no results for %q — the store has nothing matching; do not assume, just proceed without it", query))
+	}
+
+	names := s.spaceNames()
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d result(s) for %q (full entry: lore_get with the id)\n\n", len(results), query)
+	for _, r := range results {
+		markers := ""
+		if len(r.Markers) > 0 {
+			markers = " " + strings.Join(r.Markers, "")
+		}
+		fmt.Fprintf(&b, "%s  space:%s  domain:%s\n  %s (%s)%s\n  %s\n",
+			r.EntryID, names[r.SpaceID], r.Domain,
+			r.Title, r.Confidence, markers,
+			strings.ReplaceAll(r.Snippet, "\n", " "))
+	}
+	return textResult(strings.TrimRight(b.String(), "\n"))
+}
+
+// ----------------------------------------------------------------------------
+// lore_get
+// ----------------------------------------------------------------------------
+
+func (s *Server) handleGet(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	id := argString(req, "id")
+	domain := argString(req, "domain")
+	if (id == "") == (domain == "") {
+		return errResult("pass exactly one of `id` or `domain`")
+	}
+	names := s.spaceNames()
+	var b strings.Builder
+	if id != "" {
+		e, err := s.st.GetEntry(id)
+		if errors.Is(err, store.ErrNotFound) {
+			return errResult("no entry with id %q", id)
+		}
+		if err != nil {
+			return errResult("get: %v", err)
+		}
+		renderEntry(&b, e, names[e.SpaceID])
+		return textResult(strings.TrimRight(b.String(), "\n"))
+	}
+	es, err := s.st.GetDomain(domain, nil)
+	if err != nil {
+		return errResult("get domain: %v", err)
+	}
+	if len(es) == 0 {
+		return textResult(fmt.Sprintf("no entries in domain %q", domain))
+	}
+	for i, e := range es {
+		if i > 0 {
+			b.WriteString("\n---\n\n")
+		}
+		renderEntry(&b, e, names[e.SpaceID])
+	}
+	return textResult(strings.TrimRight(b.String(), "\n"))
+}
+
+// ----------------------------------------------------------------------------
+// lore_put
+// ----------------------------------------------------------------------------
+
+func (s *Server) handlePut(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	title := argString(req, "title")
+	body := argString(req, "body")
+	domain := argString(req, "domain")
+	if title == "" || body == "" || domain == "" {
+		return errResult("`title`, `body` and `domain` are required")
+	}
+
+	var target store.Space
+	if spaceArg := argString(req, "space"); spaceArg != "" {
+		sp, err := s.resolveSpace(spaceArg)
+		if err != nil {
+			return errResult("unknown space %q (try lore_spaces)", spaceArg)
+		}
+		target = sp
+	} else {
+		// Capture routing: user -> personal, codebase -> CWD project space,
+		// ambiguous (the default) -> personal.
+		personal, err := s.st.PersonalSpace()
+		if err != nil {
+			return errResult("no personal space (run `lore init`): %v", err)
+		}
+		subject := space.Subject(argString(req, "subject"))
+		if subject == "" {
+			subject = space.SubjectAmbiguous
+		}
+		projectID := ""
+		if sp, ok := s.cwdProjectSpace(); ok {
+			projectID = sp.SpaceID
+		}
+		targetID := space.RouteSpace(subject, personal.SpaceID, projectID)
+		if target, err = s.st.GetSpace(targetID); err != nil {
+			return errResult("routed space: %v", err)
+		}
+	}
+
+	e, err := s.st.PutEntry(store.PutParams{
+		EntryID:    argString(req, "id"),
+		SpaceID:    target.SpaceID,
+		Domain:     domain,
+		Title:      title,
+		Body:       body,
+		Markers:    normalizeMarkers(argString(req, "markers")),
+		Confidence: argString(req, "confidence"), // store defaults provisional
+		Origin:     argString(req, "origin"),     // store defaults evidence
+	})
+	if err != nil {
+		return errResult("put: %v", err)
+	}
+	s.afterWrite(target.SpaceID)
+	return textResult(fmt.Sprintf("stored %s (v%d) in space %q — domain %s, confidence %s, origin %s",
+		e.EntryID, e.Version, target.Name, e.Domain, e.Confidence, e.Origin))
+}
+
+// ----------------------------------------------------------------------------
+// lore_spaces
+// ----------------------------------------------------------------------------
+
+func (s *Server) handleSpaces(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	sps, err := s.st.ListSpaces()
+	if err != nil {
+		return errResult("spaces: %v", err)
+	}
+	var b strings.Builder
+	for _, sp := range sps {
+		entries, _ := s.st.ListEntries(sp.SpaceID)
+		extra := ""
+		if sp.ProjectRef != "" {
+			extra = "  project"
+		}
+		if sp.Pinned {
+			extra += "  pinned"
+		}
+		// Membership flows land in a later phase: locally every space has
+		// exactly one member (this account).
+		fmt.Fprintf(&b, "%s  kind:%s  members:1  entries:%d%s  id:%s\n",
+			sp.Name, sp.Kind, len(entries), extra, sp.SpaceID)
+	}
+	if b.Len() == 0 {
+		return textResult("no spaces (run `lore init`)")
+	}
+	return textResult(strings.TrimRight(b.String(), "\n"))
+}
+
+// ----------------------------------------------------------------------------
+// lore_share
+// ----------------------------------------------------------------------------
+
+func (s *Server) handleShare(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	entryID := argString(req, "entry_id")
+	toSpace := argString(req, "to_space")
+	if entryID == "" || toSpace == "" {
+		return errResult("`entry_id` and `to_space` are required")
+	}
+	target, err := s.resolveSpace(toSpace)
+	if err != nil {
+		return errResult("unknown space %q (try lore_spaces)", toSpace)
+	}
+	src, err := s.st.GetEntry(entryID)
+	if errors.Is(err, store.ErrNotFound) {
+		return errResult("no entry with id %q", entryID)
+	}
+	if err != nil {
+		return errResult("get: %v", err)
+	}
+	if userModelDomain(src.Domain) {
+		return errResult("refused: %q is a user-model entry (profile/, feedback/); those never leave the personal space", src.Domain)
+	}
+	names := s.spaceNames()
+
+	if !argBool(req, "confirm") {
+		var b strings.Builder
+		fmt.Fprintf(&b, "REVIEW — this exact content would be COPIED into space %q:\n\n", target.Name)
+		renderEntry(&b, src, names[src.SpaceID])
+		b.WriteString("\nNothing was shared yet. Call lore_share again with confirm:true to execute the copy (it is a copy with provenance, never a move).")
+		return textResult(b.String())
+	}
+
+	copied, err := s.st.CopyEntry(entryID, target.SpaceID)
+	if errors.Is(err, store.ErrUserModel) {
+		return errResult("refused: user-model entries (profile/, feedback/) never leave the personal space")
+	}
+	if err != nil {
+		return errResult("share: %v", err)
+	}
+	s.afterWrite(target.SpaceID)
+	return textResult(fmt.Sprintf("copied: new entry %s in space %q (source %s kept in %q)",
+		copied.EntryID, target.Name, src.EntryID, names[src.SpaceID]))
+}
