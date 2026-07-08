@@ -43,6 +43,17 @@ Personal-space blobs are only ever addressed to the same account's devices; the 
 - **Scale path (only if needed)**: split stateless relay nodes from the control plane, add regions. The protocol doesn't change because the relay was never trusted and never held per-connection state.
 - **Later optimization**: QUIC hole-punching for direct device-to-device sync across NATs, relay as rendezvous only — cuts relay bandwidth to near zero. Ships after the mailbox; the mailbox alone delivers the full UX.
 
+## Vault — new-device login without another device online
+
+The mailbox is transport; the **vault** is durable encrypted state, hosted on the same relay:
+
+- **Contents**: per-account periodic full snapshots of each space, encrypted client-side with the space keys (uploaded by the daemon after capture/compaction); plus the **account key wrapped** under Argon2id(passphrase + recovery code). The recovery code is high-entropy, generated at `lore init`, shown once to be saved — it makes the wrapped key uncrackable offline even if the relay's disk is stolen (passphrase-only wrapping would be brute-forceable).
+- **Login flow (no other device needed)**: `lore login` → handle + passphrase + recovery code → fetch wrapped account key, decrypt locally → download vault, decrypt → enroll this device's key under the account → normal syncing resumes.
+- **Easier path when another device exists**: approve-from-existing-device (existing device signs the new device key and wraps space keys to it); no recovery code typed.
+- **Zero-knowledge unchanged**: the relay stores only ciphertext; keys are derived and used exclusively on devices.
+- **Quota**: ~100 MB per account — lore data is curated text plus 1 MB-capped attachments; years of use is MBs.
+- **Tiering**: vault + personal relay sync are the paid tier. Free/local users get the same durability self-hosted: `lore backup` exports the identical encrypted archive to a file (iCloud/Drive/private repo), `lore restore` reads it on a new device.
+
 ## Client behavior
 
 The `lore serve` daemon syncs opportunistically: direct mTLS to any peer device visible on LAN/VPN; relay mailbox poll (with jitter, ~minutes) plus an optional push hint (long-poll) when the user is on the paid tier. All paths converge on the same version-vector reconciliation - transport is interchangeable.

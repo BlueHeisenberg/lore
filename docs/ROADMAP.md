@@ -33,6 +33,7 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 - [ ] mDNS discovery (`_lore._tcp`) + static peer list (`lore peer add <addr>` for VPN/Tailscale peers).
 - [ ] Version-vector sync of the `personal` space over mTLS, LWW conflict resolution, tombstones.
 - [ ] Device enrollment flow (`lore enroll` / `lore approve`).
+- [ ] `lore backup` / `lore restore`: encrypted archive export/import (self-hosted durability; same crypto the vault uses later).
 
 **Exit criterion**: distill something on the desktop, `lore search` finds it on the laptop over Tailscale.
 
@@ -54,6 +55,7 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 ## Phase 5 — relay service (paid)
 
 - [ ] Mailbox relay per docs/RELAY.md: one Go binary (HTTP API + SQLite + disk blobs), device enrollment, signature-challenge auth, blinded space IDs, retention + quotas.
+- [ ] Vault: encrypted space snapshots + Argon2id(passphrase + recovery code)-wrapped account key; `lore login` fresh-device recovery; ~100 MB/account quota. Free-tier `lore backup`/`lore restore` ships earlier (Phase 3, it's local code).
 - [ ] Client: `lore relay login`, mailbox drop/poll alongside direct LAN sync (same version-vector reconciliation).
 - [ ] (later) QUIC hole-punching, relay as rendezvous only.
 - [ ] Billing: subscription + one month free trial; expired accounts lose relay only (local tiers keep working).

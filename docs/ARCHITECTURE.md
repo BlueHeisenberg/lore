@@ -14,6 +14,7 @@ Design document. Everything here is pre-implementation and revisable.
 - **Account key**: Ed25519 keypair, generated once per user (`lore init`). Private key at `~/.lore/account.key` (0600). The public key IS the user identity.
 - **Device key**: Ed25519 keypair per device, signed by the account key (a device certificate). Sync sessions authenticate with the device cert chain: peer proves "device D belonging to account A".
 - **Enrolling a new device**: `lore enroll` on the new device prints a short-lived code/QR; `lore approve <code>` on an existing device signs the new device key. (v1 fallback: copy the account key manually.)
+- **Recovery / fresh login with no device online**: `lore login` with passphrase + recovery code fetches the wrapped account key and encrypted vault from the relay and decrypts locally (paid tier); free tier equivalent is `lore backup`/`lore restore` with a self-hosted encrypted archive. See docs/RELAY.md (Vault).
 - **mTLS reuse**: transport-level auth extends agentmesh's cert-pinning model — TLS cert pinned to the *device* key, device key chains to the *account* key.
 
 ## Data model
