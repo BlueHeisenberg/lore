@@ -36,9 +36,11 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 
 **Exit criterion**: distill something on the desktop, `lore search` finds it on the laptop over Tailscale.
 
-## Phase 4 — project lore, shared with others
+## Phase 4 — shared lore (project + topic spaces)
 
 - [ ] Project spaces: `lore project init` (binding from git remote URL), CWD-based scoping in `lore_search`, capture routing personal-vs-project.
+- [ ] Topic spaces: `lore space create <name>` (no repo binding); per-space pin / `scope` opt-in for retrieval.
+- [ ] Personal copy-out: `lore share entry` from personal → shared with mandatory content review; hard ban on profile/feedback layers.
 - [ ] Signed member lists and roles (owner/writer/reader).
 - [ ] Space content encryption (space_key wrapped per member account pubkey).
 - [ ] `lore share` / invite flow (out-of-band pubkey exchange v1).
@@ -54,7 +56,7 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 - [ ] Coordination server: accounts (handle -> pubkey), device registry, NAT traversal, DERP-style relay.
 - [ ] Client: `lore relay login`, automatic fallback direct -> relay.
 - [ ] Billing: subscription + one month free trial; expired accounts lose relay only (local tiers keep working).
-- [ ] Free tier: one project space shared with one collaborator relays for free, forever (the try-it-with-a-friend hook). Personal-lore relay sync and additional projects/collaborators are paid.
+- [ ] Free tier: one shared space (project or topic) with one collaborator relays for free, forever (the try-it-with-a-friend hook). Personal-lore relay sync and additional spaces/collaborators are paid.
 - [ ] Ops: deploy, monitoring, abuse limits.
 
 **Exit criterion**: two machines on different networks, no VPN, sync within seconds of coming online.

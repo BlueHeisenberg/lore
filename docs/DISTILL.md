@@ -60,7 +60,7 @@ This replaces distill's flat five-layer directory with a subject split: `profile
 
 ## Sharing-aware epistemics (what distill never needed)
 
-- **Personal lore is non-shareable by construction.** The user model — trust patterns, delegation habits, frustration analysis — never leaves your account's devices; the binary refuses to add members to the personal space or move its entries into a project space. No mis-click can sync your user model to a collaborator.
+- **The user model is non-shareable by construction.** `profile/` and `feedback/` — trust patterns, delegation habits, frustration analysis — never leave your account's devices; the binary refuses to copy or move them out, and no members can ever be added to the personal space. Other personal entries (craft, ops, general learnings) CAN be copied out to a shared space — explicit user act, content reviewed before publishing, provenance kept, original stays personal. Reading is free; publishing is deliberate.
 - **Cross-author contradictions are knowledge states, not sync conflicts.** When two authors' entries in the same domain disagree, LWW must not squash them: lore detects the contradiction and surfaces it as a `[CONTEXT]` candidate ("which context applies?") — distill's conflict-detection idea generalized to teams.
 - **Confidence is observer-relative at read time.** A teammate's `validated` arrives as your `provisional` until it survives your own sessions. Authorship is signed, so provenance is always available to the reader.
 

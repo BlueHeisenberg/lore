@@ -12,9 +12,9 @@ Every AI session starts from zero. Systems like [aura-distill](https://github.co
 
 ## Two kinds of lore
 
-**1. Personal lore — from you, for you.** Everything distill captures about *you*: your profile, preferences, craft standards, operational habits, cross-project learnings. It syncs between your harness sessions (same machine), your devices on the local network, and — with the paid relay — your devices anywhere. It is never shareable with anyone else, by construction.
+**1. Personal lore — from you, for you.** Everything distill captures about *you*: your profile, preferences, craft standards, operational habits, cross-project learnings. It syncs between your harness sessions (same machine), your devices on the local network, and — with the paid relay — your devices anywhere. Nobody else can be added to it. Your user model (profile/feedback) can never leave it; other personal entries can be *copied out* to a shared space, but only as an explicit, reviewed act.
 
-**2. Project lore — per project, shareable.** Knowledge about a specific codebase or effort: its architecture decisions, constraints, gotchas, corrected conclusions. Each project gets its own space, bound to the repo. You can invite collaborators: sharing on the local network is free; sharing across networks goes through the paid relay — except **one project with one collaborator is free**, so trying lore with a friend costs nothing.
+**2. Shared lore — invite-based.** Two flavors of the same thing: **project spaces** bound to a repo (architecture decisions, constraints, gotchas, corrected conclusions about that codebase) and **topic spaces** bound to nothing ("godot-tips", "ble-security" — pure knowledge you share with someone). Sharing on the local network is free; sharing across networks goes through the paid relay — except **one shared space with one collaborator is free**, so trying lore with a friend costs nothing.
 
 When a session distills learnings, each one is routed: insights about the user go to personal lore, insights about the codebase go to that project's lore. Ambiguous ones default to personal (the safe side).
 
@@ -25,7 +25,7 @@ When a session distills learnings, each one is routed: insights about the user g
 - **Syncs across three tiers**:
   1. **Same machine / LAN** — automatic peer discovery via mDNS, mutual TLS (agentmesh transport).
   2. **Your devices anywhere** — works over any existing VPN (Tailscale, WireGuard); to lore it's just IP connectivity.
-  3. **lore relay (paid, planned)** — a hosted coordination + relay service so devices sync across networks with zero VPN setup. End-to-end encrypted: the relay is a dumb pipe and never sees plaintext knowledge. One month free trial; one project shared with one collaborator stays free forever.
+  3. **lore relay (paid, planned)** — a hosted coordination + relay service so devices sync across networks with zero VPN setup. End-to-end encrypted: the relay is a dumb pipe and never sees plaintext knowledge. One month free trial; one shared space with one collaborator stays free forever.
 - **Exposes MCP tools** — `lore_search`, `lore_get`, `lore_put`, `lore_spaces` — so any harness reads/writes knowledge mid-session.
 - **Keeps the distill flow working** — `~/.claude/distill/` becomes a live view of your `personal` space. `/distill` keeps writing files; lore syncs them.
 

@@ -49,21 +49,27 @@ size          bytes (soft cap ~1 MB v1; lore is not file sync)
 
 Short excerpts belong inline in the entry body (it's markdown); attachments are for whole files. Attaching into a shared project space publishes the file to that space's members, so it is always an explicit user act — the agent may suggest, never attach unasked — and the CLI warns when content looks like a secret (.env, key material, tokens). For ephemeral session-to-session file transfer, agentmesh `mesh_share`/`mesh_fetch` remains the tool; lore attachments are for reference material that belongs with the knowledge.
 
-**Space** — the sharing unit. Spaces come in two kinds, which are the product's two features:
+**Space** — the sharing unit. Two kinds:
 
 ```
 space_id      uuid
-kind          personal | project
-name          "personal", "agentmesh", "varg-app-2", ...
-project_ref   (project spaces) stable project identifier - normalized git
-              remote URL hash, or explicit id for non-git projects
+kind          personal | shared
+name          "personal", "agentmesh", "godot-tips", ...
+project_ref   optional (shared spaces): stable project identifier -
+              normalized git remote URL hash, or explicit id. With it, the
+              space is a PROJECT space (CWD scoping + capture routing);
+              without it, a TOPIC space (pure knowledge sharing).
 members       list of (account_pubkey, role: owner|writer|reader)
-space_key     symmetric key for content encryption (project spaces only),
+space_key     symmetric key for content encryption (shared spaces only),
               distributed wrapped to each member's account pubkey
 ```
 
-- **`personal` (feature 1)** — created at init, exactly one, members: you. From your user, for your user: profile, feedback, craft, ops, cross-project learnings. Syncs across your own devices (LAN free, relay paid). The binary refuses to add members or move its entries to a project space — non-shareable by construction, not by convention.
-- **`project` (feature 2)** — one per project, created/joined via `lore project init` in the repo (binding suggested from the git remote URL). Holds knowledge about that codebase: architecture decisions, constraints, gotchas, corrected conclusions. Shareable: members exchange invites; LAN sync free, cross-network sync via relay (paid, except the free tier: one project shared with one collaborator).
+- **`personal` (feature 1)** — created at init, exactly one, members: you. From your user, for your user: profile, feedback, craft, ops, cross-project learnings. Syncs across your own devices (LAN free, relay paid). The binary refuses to add members to it.
+  - The user-model layers `profile/` and `feedback/` are **never shareable** — the binary refuses to copy or move them out, period.
+  - Other personal entries (craft, ops, general learnings) can be **copied out** to a shared space: explicit user act, content shown for review before publishing, provenance kept, original stays personal. Never a move, never automatic.
+- **`shared` (feature 2)** — invite-based knowledge sharing; LAN sync free, cross-network via relay (paid, except the free tier: one shared space with one collaborator). Two flavors:
+  - **Project space** (`project_ref` set) — one per repo, created/joined via `lore project init`. Holds knowledge about that codebase: architecture decisions, constraints, gotchas, corrected conclusions.
+  - **Topic space** (no `project_ref`) — knowledge around a subject rather than a repo: "godot-tips", "ble-security". Created via `lore space create <name>`. Same membership/sync/encryption rules; not tied to any working directory, searched when the user or agent opts in (`scope` param or per-space pin).
 - **Routing rule (capture)**: when a session distills learnings, each entry is classified — about the user → `personal`; about the codebase → the CWD's project space; ambiguous → `personal` (safe side). See docs/DISTILL.md.
 - **Scoping rule (retrieval)**: `lore_search` defaults to `personal` + the current project's space (detected from CWD); other project spaces are opt-in per query.
 - **Cross-project sharing** — three explicit mechanisms, no implicit propagation (generic learnings already travel via personal lore):
