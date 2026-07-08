@@ -14,7 +14,23 @@ Design document. Everything here is pre-implementation and revisable.
 - **Account key**: Ed25519 keypair, generated once per user (`lore init`). Private key at `~/.lore/account.key` (0600). The public key IS the user identity.
 - **Device key**: Ed25519 keypair per device, signed by the account key (a device certificate). Sync sessions authenticate with the device cert chain: peer proves "device D belonging to account A".
 - **Enrolling a new device**: `lore enroll` on the new device prints a short-lived code/QR; `lore approve <code>` on an existing device signs the new device key. (v1 fallback: copy the account key manually.)
-- **Recovery / fresh login with no device online**: `lore login` with passphrase + recovery code fetches the wrapped account key and encrypted vault from the relay and decrypts locally (paid tier); free tier equivalent is `lore backup`/`lore restore` with a self-hosted encrypted archive. See docs/RELAY.md (Vault).
+- **Recovery / fresh login with no device online**: `lore login` with passphrase + recovery code fetches the wrapped account key and encrypted state from the relay and decrypts locally (paid tier); free tier equivalent is `lore backup`/`lore restore` with a self-hosted encrypted archive. See docs/RELAY.md (Login & recovery).
+
+## Onboarding — there is no signup
+
+- **`lore init`** (free, local): generates the account keypair + this device's key, creates the `personal` space, prints the recovery code once. No email, no username, no server. The account IS the keypair. The recovery code MUST be confirmed by re-typing it before init completes (converts "yeah, next" into actually-saved); the CLI suggests a password manager and offers the recovery kit as a downloadable file.
+- **Second device (free)**: `lore enroll` on the new device shows a short code/QR; `lore approve <code>` on an existing device signs the new device key and hands over wrapped space keys.
+- **`lore signup`** (relay tier): pick a public handle (`@david`), set a passphrase; client uploads the public key, handle→pubkey mapping, and the keybox. Email exists only inside Stripe for billing — the relay's crypto layer never sees it.
+
+## Invites — sharing a space with someone
+
+Sharing = obtaining the friend's account pubkey trustworthily; then the owner's device wraps the space_key to it and appends a newly signed member list to the space log. Three first-contact paths:
+
+1. **Same LAN (free)** — pairing-style: `lore space invite <space>` prints a short-lived code; the friend runs `lore join <code>`; daemons find each other over mDNS, exchange pubkeys over mTLS, and **both sides confirm a short fingerprint** (word/emoji string) so a network MITM can't slip in.
+2. **Remote via relay** — handles: `lore space invite <space> @bob` → relay resolves handle → invite lands in their pending list (daemon long-poll) → `lore invites` to accept. Optional Signal-style safety-number verification.
+3. **Remote without relay** — invite file sent over any channel covers the key exchange, but syncing still needs a transport (LAN, user's own VPN, or relay), so this path converges on "bring your own Tailscale" or the relay free tier.
+
+Invariants: invites are always explicitly accepted (first-contact approval); the owner assigns the role (reader/writer) at invite time; removal rotates the space_key (manual v1).
 - **mTLS reuse**: transport-level auth extends agentmesh's cert-pinning model — TLS cert pinned to the *device* key, device key chains to the *account* key.
 
 ## Data model

@@ -37,11 +37,33 @@ GET  /v1/accounts/{handle}                  handle -> account pubkey (invite dis
 - **Auth**: signature challenge on the device key. No passwords, no bearer tokens at rest. Billing identity (Stripe email) is separate from crypto identity.
 - **Blinded space IDs**: HMAC over space_id with the space_key, so the relay cannot correlate spaces across users.
 
-## Login flows
+## Login & recovery
 
 - **Fresh device, nothing else online**: `lore login` → handle + passphrase + recovery code → fetch keybox, unwrap account key locally → enroll device key → pull snapshot + log tail per space → decrypt locally. Everything is there.
 - **Another device is handy**: approve-from-existing-device (it signs the new device key and wraps space keys to it) — no recovery code typed.
 - **Free/local users**: same durability self-hosted — `lore backup` exports the identical encrypted archive to a file (iCloud/Drive/private repo), `lore restore` imports it. LAN sync needs no relay at all.
+
+### Lost-factor matrix (strict mode, the only v1 mode)
+
+**Any logged-in device is a master reset**: the account key lives on every enrolled device, so `lore passphrase reset` there re-wraps a fresh keybox and can mint a new recovery code. Device-less recovery requires BOTH factors — deliberate: if the recovery code alone unlocked, whoever finds the paper owns the account (the passphrase protects the paper; the paper protects against weak passphrases; a device makes both replaceable).
+
+| User still has | Outcome |
+|---|---|
+| Any one device | Full recovery — reset passphrase and/or recovery code from it |
+| No device, passphrase + recovery code | Full recovery — `lore login` |
+| No device, only one factor | Gone. Nobody can restore it — not even the operator. |
+
+Keeping users out of the "gone" row:
+- **Forced confirmation at init**: the recovery code must be re-typed before `lore init` completes, with explicit copy: "STORE THIS NOW — without it (and your passphrase), losing your devices means your lore is UNRECOVERABLE. Nobody can restore it — not even us."
+- **Recovery kit as downloadable file** + suggestion to store it in a password manager (the correct home: encrypted, synced, searchable). If a user emails it to themselves, that's their risk decision with their tools — the product never emails codes (it would transit our pipeline in plaintext and live forever in an inbox).
+- **Periodic re-verification nudge** (Signal-PIN-style): every few months the daemon asks for the recovery code once, catching lost codes while a device still exists to fix it.
+- **`lore backup` counts as a device** for recovery purposes.
+
+Deferred (not v1): an opt-in **recoverable mode** à la iCloud — escrowed account key encrypted to an operator key held offline, released only after billing-email verification + a multi-day waiting period with cancel notifications to all devices. Revisit if real users lose everything.
+
+### Trust root
+
+The zero-knowledge guarantee holds against the server operator: private keys are generated on devices and never leave; public keys can't be turned into certs or signatures; the keybox is uncrackable without both factors. What users ultimately trust is the **client binary** (it holds keys pre-encryption) — the standard mitigation is open-sourcing the client and signing releases, planned when the code exists.
 
 ## What the relay can and cannot do
 

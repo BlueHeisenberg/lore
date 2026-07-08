@@ -56,6 +56,8 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 
 - [ ] Hosted-state relay per docs/RELAY.md: per-space encrypted snapshot + append-only delta log (one Go binary, HTTP API + SQLite + disk blobs), device enrollment, signature-challenge auth, blinded space IDs, client-side compaction, quotas (~100 MB/account).
 - [ ] Keybox: Argon2id(passphrase + recovery code)-wrapped account key; `lore login` fresh-device flow (keybox -> snapshot + log tail). Free-tier `lore backup`/`lore restore` ships earlier (Phase 3, it's local code).
+- [ ] Recovery UX (strict mode only in v1): forced recovery-code re-type at init, downloadable recovery kit + password-manager suggestion, periodic re-verification nudge, device-side `lore passphrase reset`. No code ever emailed by the product. Escrowed "recoverable mode" deferred (see docs/RELAY.md).
+- [ ] Signup + invites: `lore signup` (handle, passphrase, keybox), handle-based space invites with pending-accept flow, LAN pairing invites with fingerprint confirmation.
 - [ ] Client: immediate delta append on capture, long-poll apply (seconds-level device-to-device propagation), alongside direct LAN sync (same version-vector reconciliation).
 - [ ] (later) QUIC hole-punching, relay as rendezvous only.
 - [ ] Billing: subscription + one month free trial; expired accounts lose relay only (local tiers keep working).
@@ -65,6 +67,9 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 **Exit criterion**: two machines on different networks, no VPN, sync within seconds of coming online.
 
 ## Open questions
+
+- Domain: `lore.foo` (bare product name, ~$20-25/yr) vs `loremesh.dev` (family branding with agentmesh, ~$12-15/yr) — both confirmed available 2026-07; also free: corelore.dev, lorewire.dev, deeplore.dev, sharedlore.dev, lorecli.dev, lorepad.dev, lorebox.dev.
+- Recoverable mode (escrow with offline operator key + waiting period): ship if real users lose accounts.
 
 - Group-key rotation on member removal (v1: manual space_key rotation; revisit).
 - Multiple distill profiles (`~/.claude-<name>/distill`) → map to multiple spaces?
