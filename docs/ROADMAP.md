@@ -54,9 +54,9 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 
 ## Phase 5 — relay service (paid)
 
-- [ ] Mailbox relay per docs/RELAY.md: one Go binary (HTTP API + SQLite + disk blobs), device enrollment, signature-challenge auth, blinded space IDs, retention + quotas.
-- [ ] Vault: encrypted space snapshots + Argon2id(passphrase + recovery code)-wrapped account key; `lore login` fresh-device recovery; ~100 MB/account quota. Free-tier `lore backup`/`lore restore` ships earlier (Phase 3, it's local code).
-- [ ] Client: `lore relay login`, mailbox drop/poll alongside direct LAN sync (same version-vector reconciliation).
+- [ ] Hosted-state relay per docs/RELAY.md: per-space encrypted snapshot + append-only delta log (one Go binary, HTTP API + SQLite + disk blobs), device enrollment, signature-challenge auth, blinded space IDs, client-side compaction, quotas (~100 MB/account).
+- [ ] Keybox: Argon2id(passphrase + recovery code)-wrapped account key; `lore login` fresh-device flow (keybox -> snapshot + log tail). Free-tier `lore backup`/`lore restore` ships earlier (Phase 3, it's local code).
+- [ ] Client: immediate delta append on capture, long-poll apply (seconds-level device-to-device propagation), alongside direct LAN sync (same version-vector reconciliation).
 - [ ] (later) QUIC hole-punching, relay as rendezvous only.
 - [ ] Billing: subscription + one month free trial; expired accounts lose relay only (local tiers keep working).
 - [ ] Free tier: one shared space (project or topic) with one collaborator relays for free, forever (the try-it-with-a-friend hook). Personal-lore relay sync and additional spaces/collaborators are paid.

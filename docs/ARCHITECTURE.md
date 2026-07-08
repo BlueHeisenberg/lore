@@ -114,7 +114,7 @@ Context discipline (lesson from agentmesh): the MCP server injects **nothing** p
 
 ## Relay service (tier 3, last)
 
-An **encrypted mailbox**, not a tunnel: devices drop E2E-encrypted, author-signed sync deltas; recipients pick them up when online. The relay sees only pubkeys, sizes, and timing — never plaintext, space names, or real space IDs. Full design: docs/RELAY.md.
+The **encrypted home of your lore**: per space, the relay always holds full current state — compacted snapshot + append-only delta log, all encrypted client-side and author-signed. Log in on any device and everything is there; captures propagate device-to-device in seconds via long-poll. Devices are the source of truth (they hold the keys); the relay is the source of availability — it sees only pubkeys, sizes, and timing, never plaintext, space names, or real space IDs. Full design: docs/RELAY.md.
 
 - Billing: subscription, one month free trial. Relay refuses sync for expired accounts; tiers 1–2 keep working forever (the free/local product is complete on its own).
 - Server stack: one Go binary on one small VPS — HTTP API + SQLite + blobs on disk. Quotas enforce the free tier. QUIC hole-punching (relay as rendezvous only) is a later optimization, not a launch requirement.
