@@ -1,0 +1,4 @@
+lore
+dist/
+*.db
+.DS_Store
