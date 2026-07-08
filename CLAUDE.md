@@ -13,5 +13,6 @@ Read `README.md`, `docs/ARCHITECTURE.md`, and `docs/ROADMAP.md` before doing any
 
 ## Current state (update this section as work progresses)
 
-- Phase: design. Docs written, repo created (private).
-- Next task: Phase 0 — extract `pkg/discovery` + `pkg/transport` in agentmesh, then Phase 1 scaffold per ROADMAP.md.
+- Phase: 1 (local core) done. `internal/keys` (account/device keys, certs, recovery code), `internal/store` (SQLite WAL + FTS5, canonical signing, LWW ApplyRemote, enforcement rules), `internal/space` (project_ref, routing, space_key), `internal/distill` (import/render/watch with loop-guard), `cmd/lore` (init/put/get/search/spaces/status/distill). All unit tests green; e2e verified on Windows.
+- Phase 0 (agentmesh pkg extraction) still pending — agentmesh is not imported yet (replace directive is in go.mod, unused).
+- Next task: Phase 2 per ROADMAP.md (MCP server + daemon groundwork); also Phase 0 extraction in agentmesh when needed.
