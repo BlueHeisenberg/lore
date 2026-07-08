@@ -27,7 +27,7 @@ One **account keypair** per user (Ed25519). Each device holds a **device key** s
 
 ## Status
 
-Design phase. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [docs/ROADMAP.md](docs/ROADMAP.md) for the build plan.
+Design phase. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design, [docs/DISTILL.md](docs/DISTILL.md) for the knowledge-capture model and its aura-distill heritage, and [docs/ROADMAP.md](docs/ROADMAP.md) for the build plan.
 
 ## License
 

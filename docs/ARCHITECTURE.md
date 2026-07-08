@@ -48,6 +48,7 @@ space_key     symmetric key for content encryption (shared spaces only),
 ```
 
 - Every user gets a `personal` space at init (members: just them; no content encryption needed until relay tier).
+- **Layer → space rule (enforced)**: entries in the distill layers `profile/` and `feedback/` (the user model) are personal-space-only — the binary refuses to move or copy them to a shared space. `projects/`, `craft/`, `ops/` are shareable. See docs/DISTILL.md.
 - Membership changes are signed by an owner. v1 keeps a simple signed member-list document; no fancy group-key rotation initially (rotate space_key manually on member removal).
 
 **Store**: SQLite at `~/.lore/lore.db` (entries, spaces, peers, sync state). The distill directory is a *materialized view*: lore renders the `personal` space (and any space the user opts in) to `~/.claude/distill/` files, and watches that directory for writes made by `/distill`, importing changes back as entry versions. Conflict rule: last-writer-wins per entry by (updated_at, author pubkey) — good enough for v1; entries are append-mostly.

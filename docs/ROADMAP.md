@@ -23,6 +23,7 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 - [ ] Tools: `lore_search`, `lore_get`, `lore_put`, `lore_spaces`.
 - [ ] Installer registration for the four harnesses (reuse agentmesh install.sh/install.ps1 patterns).
 - [ ] Zero per-turn context injection — tools only.
+- [ ] `/lore` skill: retrospective capture (distill-equivalent) writing via `lore_put`; tiered invocation policy per docs/DISTILL.md (reads always autonomous, single-fact capture inline, full retrospective suggest-by-default with `autocapture` opt-in).
 
 **Exit criterion**: a Claude Code session on a fresh project answers from knowledge distilled in another project's session, via `lore_search`.
 
