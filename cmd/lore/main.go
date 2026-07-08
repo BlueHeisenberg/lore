@@ -113,16 +113,13 @@ type config struct {
 	DistillDir string `json:"distill_dir"`
 }
 
-func defaultDistillDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".claude", "distill")
-}
-
+// loadConfig reads LORE_HOME/config.json. The distill mirror is strictly
+// opt-in: an empty distill_dir means the adapter is off. Nothing in lore may
+// default to the real ~/.claude/distill — pointing lore at a live directory
+// it doesn't own is an explicit user decision (set distill_dir in config.json
+// or pass --dir to `lore distill`).
 func loadConfig(loreHome string) config {
-	cfg := config{DistillDir: defaultDistillDir()}
+	var cfg config
 	b, err := os.ReadFile(filepath.Join(loreHome, "config.json"))
 	if err == nil {
 		var c config
@@ -220,7 +217,7 @@ func cmdInit(args []string) error {
 	}
 	cfgPath := filepath.Join(home, "config.json")
 	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
-		b, _ := json.MarshalIndent(config{DistillDir: defaultDistillDir()}, "", "  ")
+		b, _ := json.MarshalIndent(config{}, "", "  ")
 		if err := os.WriteFile(cfgPath, append(b, '\n'), 0o600); err != nil {
 			return err
 		}
