@@ -35,7 +35,19 @@ created_at / updated_at
 version       monotonic int per entry
 signature     author's device key over the canonical encoding
 tombstone     bool (deletes propagate as tombstones)
+attachments   list of blob refs (see below), optional
 ```
+
+**Attachment** — durable reference material carried by an entry (a source file, a design doc, a config worth reusing elsewhere). Content-addressed blob (sha256), stored and synced with the entry's space, with provenance:
+
+```
+blob_hash     sha256 of content
+filename      original name
+source        project ref + repo-relative path + commit (when taken from a repo)
+size          bytes (soft cap ~1 MB v1; lore is not file sync)
+```
+
+Short excerpts belong inline in the entry body (it's markdown); attachments are for whole files. Attaching into a shared project space publishes the file to that space's members, so it is always an explicit user act — the agent may suggest, never attach unasked — and the CLI warns when content looks like a secret (.env, key material, tokens). For ephemeral session-to-session file transfer, agentmesh `mesh_share`/`mesh_fetch` remains the tool; lore attachments are for reference material that belongs with the knowledge.
 
 **Space** — the sharing unit. Spaces come in two kinds, which are the product's two features:
 
@@ -86,10 +98,10 @@ The lore daemon (`lore serve`) runs one process per *machine* (unlike agentmesh'
 | Tool | Purpose |
 |---|---|
 | `lore_search` | full-text + domain/marker/confidence filtered search across readable spaces |
-| `lore_get` | fetch entry (or whole domain file) by id/domain |
-| `lore_put` | create or update an entry (defaults to `personal`) |
+| `lore_get` | fetch entry (or whole domain file) by id/domain; `lore_get_attachment` for blobs |
+| `lore_put` | create or update an entry (defaults to `personal`); may attach files with explicit user approval |
 | `lore_spaces` | list spaces, members, sync status |
-| `lore_share` | move/copy an entry to a shared space |
+| `lore_share` | copy an entry (with attachments) to a project space — explicit user act |
 
 Context discipline (lesson from agentmesh): the MCP server injects **nothing** per turn. No hooks by default. Knowledge enters context only when the agent calls a tool, or via the existing distill startup convention (reading SPINE.md), which stays user-controlled in CLAUDE.md.
 
