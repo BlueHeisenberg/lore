@@ -60,7 +60,7 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 - [ ] (later) QUIC hole-punching, relay as rendezvous only.
 - [ ] Billing: subscription + one month free trial; expired accounts lose relay only (local tiers keep working).
 - [ ] Free tier: one shared space (project or topic) with one collaborator relays for free, forever (the try-it-with-a-friend hook). Personal-lore relay sync and additional spaces/collaborators are paid.
-- [ ] Ops: deploy, monitoring, abuse limits.
+- [ ] Ops: Phase A home server + Cloudflare Tunnel (free, IP hidden) -> Phase B Hetzner VPS on first paying users; monitoring, abuse limits.
 
 **Exit criterion**: two machines on different networks, no VPN, sync within seconds of coming online.
 

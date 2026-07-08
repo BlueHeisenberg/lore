@@ -54,6 +54,15 @@ The mailbox is transport; the **vault** is durable encrypted state, hosted on th
 - **Quota**: ~100 MB per account — lore data is curated text plus 1 MB-capped attachments; years of use is MBs.
 - **Tiering**: vault + personal relay sync are the paid tier. Free/local users get the same durability self-hosted: `lore backup` exports the identical encrypted archive to a file (iCloud/Drive/private repo), `lore restore` reads it on a new device.
 
+## Hosting plan
+
+The relay is one self-contained binary that doesn't trust its front door (payloads are E2E-encrypted, auth is signature-based), so hosting is interchangeable:
+
+1. **Phase A — zero users, zero cost**: run on the home server behind a **Cloudflare Tunnel** (`cloudflared` makes an outbound connection; no open ports, origin IP never exposed; free tier). Cloudflare terminating TLS is acceptable *because of* the zero-knowledge design — the edge sees the same ciphertext + metadata the relay itself sees.
+2. **Phase B — paying users**: move the same binary to a small VPS (Hetzner ARM ~€4/mo): rsync SQLite + blob dir, repoint DNS, keep Cloudflare in front. No code changes.
+- Rejected: proxy-only VPS in front of the home server (if you're paying for a VPS, run the relay on it); serverless rearchitecture (Lambda/Firebase/Cloud Run — forks the storage/auth implementation and adds lock-in to save €4/mo). Oracle Always Free is a viable dev-relay alternative to home hosting, with known instance-reclamation risk.
+- Implementation note: the relay must not care about client IPs (it doesn't — auth is cryptographic), so proxying changes nothing.
+
 ## Client behavior
 
 The `lore serve` daemon syncs opportunistically: direct mTLS to any peer device visible on LAN/VPN; relay mailbox poll (with jitter, ~minutes) plus an optional push hint (long-poll) when the user is on the paid tier. All paths converge on the same version-vector reconciliation - transport is interchangeable.
