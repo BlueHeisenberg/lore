@@ -42,6 +42,7 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 - [ ] Signed member lists and roles (owner/writer/reader).
 - [ ] Space content encryption (space_key wrapped per member account pubkey).
 - [ ] `lore share` / invite flow (out-of-band pubkey exchange v1).
+- [ ] Cross-project: `lore share entry --to <project>` (copy with provenance), `lore project link` (per-reader retrieval hint), `scope` param on `lore_search`.
 - [ ] First-contact UX: surface new-space invitations for explicit user approval.
 - [ ] Enforce personal-space isolation: no members, no entry moves out.
 
