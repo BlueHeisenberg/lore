@@ -1,0 +1,16 @@
+# Cloudflare Tunnel config for the lore relay (Phase A: home server, no open ports).
+# Prereqs (one-time, needs the Cloudflare account + domain):
+#   cloudflared tunnel login                      # browser auth against the CF account
+#   cloudflared tunnel create lore-relay          # writes credentials JSON, note the UUID
+#   cloudflared tunnel route dns lore-relay relay.<DOMAIN>   # creates the CNAME
+# Then place this file at /etc/cloudflared/config.yml and run:
+#   cloudflared service install && systemctl enable --now cloudflared
+
+tunnel: <TUNNEL-UUID>                       # from `cloudflared tunnel create`
+credentials-file: /etc/cloudflared/<TUNNEL-UUID>.json
+
+ingress:
+  - hostname: relay.<DOMAIN>                # e.g. relay.lore.foo
+    service: http://localhost:8480          # lore-relay listen addr (TLS terminates at CF edge;
+                                            # payloads are E2E-encrypted so this is acceptable)
+  - service: http_status:404

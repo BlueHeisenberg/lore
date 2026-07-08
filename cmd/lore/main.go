@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/BlueHeisenberg/lore/internal/distill"
@@ -26,18 +27,39 @@ func main() {
 	}
 }
 
-func usage() error {
-	fmt.Fprint(os.Stderr, `usage: lore <command> [flags]
+// command registry: each command lives in its own file and self-registers
+// via register() from an init(), so adding commands never edits shared files.
+type command struct {
+	fn   func([]string) error
+	desc string
+}
 
-commands:
-  init      create account, device and personal space
-  put       create or update an entry
-  get       print an entry by id, or all entries in a domain
-  search    full-text search with filters
-  spaces    list spaces
-  status    identity and store summary
-  distill   import|render the distill mirror directory
-`)
+var commands = map[string]command{}
+var commandOrder []string
+
+func register(name, desc string, fn func([]string) error) {
+	commands[name] = command{fn: fn, desc: desc}
+	commandOrder = append(commandOrder, name)
+}
+
+func init() {
+	register("init", "create account, device and personal space", cmdInit)
+	register("put", "create or update an entry", cmdPut)
+	register("get", "print an entry by id, or all entries in a domain", cmdGet)
+	register("search", "full-text search with filters", cmdSearch)
+	register("spaces", "list spaces", cmdSpaces)
+	register("status", "identity and store summary", cmdStatus)
+	register("distill", "import|render the distill mirror directory", cmdDistill)
+}
+
+func usage() error {
+	fmt.Fprintln(os.Stderr, "usage: lore <command> [flags]")
+	fmt.Fprintln(os.Stderr, "\ncommands:")
+	names := append([]string(nil), commandOrder...)
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprintf(os.Stderr, "  %-9s %s\n", name, commands[name].desc)
+	}
 	return errors.New("no command")
 }
 
@@ -46,27 +68,14 @@ func run(args []string) error {
 		return usage()
 	}
 	cmd, rest := args[0], args[1:]
-	switch cmd {
-	case "init":
-		return cmdInit(rest)
-	case "put":
-		return cmdPut(rest)
-	case "get":
-		return cmdGet(rest)
-	case "search":
-		return cmdSearch(rest)
-	case "spaces":
-		return cmdSpaces(rest)
-	case "status":
-		return cmdStatus(rest)
-	case "distill":
-		return cmdDistill(rest)
-	case "help", "-h", "--help":
+	if cmd == "help" || cmd == "-h" || cmd == "--help" {
 		usage()
 		return nil
-	default:
-		return fmt.Errorf("unknown command %q (try `lore help`)", cmd)
 	}
+	if c, ok := commands[cmd]; ok {
+		return c.fn(rest)
+	}
+	return fmt.Errorf("unknown command %q (try `lore help`)", cmd)
 }
 
 // parseArgs parses a flag set but accepts flags anywhere on the line
