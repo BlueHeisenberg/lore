@@ -113,9 +113,10 @@ Context discipline (lesson from agentmesh): the MCP server injects **nothing** p
 
 ## Relay service (tier 3, last)
 
-- Coordination server: account registration (handle -> account pubkey), device registry, space membership hints, NAT traversal (DERP-style relaying; direct connection upgrade when possible).
+An **encrypted mailbox**, not a tunnel: devices drop E2E-encrypted, author-signed sync deltas; recipients pick them up when online. The relay sees only pubkeys, sizes, and timing — never plaintext, space names, or real space IDs. Full design: docs/RELAY.md.
+
 - Billing: subscription, one month free trial. Relay refuses sync for expired accounts; tiers 1–2 keep working forever (the free/local product is complete on its own).
-- Server stack: Go, same transport code, stateless relay nodes + small control-plane DB.
+- Server stack: one Go binary on one small VPS — HTTP API + SQLite + blobs on disk. Quotas enforce the free tier. QUIC hole-punching (relay as rendezvous only) is a later optimization, not a launch requirement.
 
 ## Non-goals (v1)
 

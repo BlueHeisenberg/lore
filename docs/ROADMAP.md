@@ -53,8 +53,9 @@ Phases are ordered so each ships something usable on its own. Tier 3 (paid relay
 
 ## Phase 5 — relay service (paid)
 
-- [ ] Coordination server: accounts (handle -> pubkey), device registry, NAT traversal, DERP-style relay.
-- [ ] Client: `lore relay login`, automatic fallback direct -> relay.
+- [ ] Mailbox relay per docs/RELAY.md: one Go binary (HTTP API + SQLite + disk blobs), device enrollment, signature-challenge auth, blinded space IDs, retention + quotas.
+- [ ] Client: `lore relay login`, mailbox drop/poll alongside direct LAN sync (same version-vector reconciliation).
+- [ ] (later) QUIC hole-punching, relay as rendezvous only.
 - [ ] Billing: subscription + one month free trial; expired accounts lose relay only (local tiers keep working).
 - [ ] Free tier: one shared space (project or topic) with one collaborator relays for free, forever (the try-it-with-a-friend hook). Personal-lore relay sync and additional spaces/collaborators are paid.
 - [ ] Ops: deploy, monitoring, abuse limits.
