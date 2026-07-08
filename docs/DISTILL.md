@@ -48,9 +48,19 @@ Safety properties that make autonomous writes acceptable:
 - Autonomous writes land in the `personal` space only, as `experimental`/`provisional`. Never a shared space, never a confidence promotion — only user-confirmed patterns climb the ladder.
 - Every entry is versioned and signed; anything can be reverted.
 
+## Capture routing (two features, one retrospective)
+
+The `/lore` retrospective classifies every learning by *subject* and routes it:
+
+- **About the user** (profile, feedback, craft standards, personal ops habits, cross-project patterns) → **personal lore**. Always.
+- **About the codebase** (architecture decisions, project constraints, gotchas, corrected conclusions specific to this repo) → the **current project's lore** (space detected from CWD; created on first capture via `lore project init` prompt if missing).
+- **Ambiguous** → personal (the safe side; a later capture can promote it to the project space explicitly — the reverse move is what the binary forbids).
+
+This replaces distill's flat five-layer directory with a subject split: `profile/` and `feedback/` layers only ever exist in personal lore; `projects/` content lives in project spaces; `craft/` and `ops/` route by subject (your habits → personal; this repo's deploy procedure → project).
+
 ## Sharing-aware epistemics (what distill never needed)
 
-- **Layer → space mapping (hard rule).** `profile/` and `feedback/` — the user model: trust patterns, delegation habits, frustration analysis — are personal-space-only and NEVER shareable. `projects/`, `craft/`, `ops/` are shareable. The binary enforces this; no mis-click can sync your user model to `team-backend`.
+- **Personal lore is non-shareable by construction.** The user model — trust patterns, delegation habits, frustration analysis — never leaves your account's devices; the binary refuses to add members to the personal space or move its entries into a project space. No mis-click can sync your user model to a collaborator.
 - **Cross-author contradictions are knowledge states, not sync conflicts.** When two authors' entries in the same domain disagree, LWW must not squash them: lore detects the contradiction and surfaces it as a `[CONTEXT]` candidate ("which context applies?") — distill's conflict-detection idea generalized to teams.
 - **Confidence is observer-relative at read time.** A teammate's `validated` arrives as your `provisional` until it survives your own sessions. Authorship is signed, so provenance is always available to the reader.
 

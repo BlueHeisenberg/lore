@@ -37,18 +37,23 @@ signature     author's device key over the canonical encoding
 tombstone     bool (deletes propagate as tombstones)
 ```
 
-**Space** — the sharing unit:
+**Space** — the sharing unit. Spaces come in two kinds, which are the product's two features:
 
 ```
 space_id      uuid
-name          "personal", "team-backend", ...
+kind          personal | project
+name          "personal", "agentmesh", "varg-app-2", ...
+project_ref   (project spaces) stable project identifier - normalized git
+              remote URL hash, or explicit id for non-git projects
 members       list of (account_pubkey, role: owner|writer|reader)
-space_key     symmetric key for content encryption (shared spaces only),
+space_key     symmetric key for content encryption (project spaces only),
               distributed wrapped to each member's account pubkey
 ```
 
-- Every user gets a `personal` space at init (members: just them; no content encryption needed until relay tier).
-- **Layer → space rule (enforced)**: entries in the distill layers `profile/` and `feedback/` (the user model) are personal-space-only — the binary refuses to move or copy them to a shared space. `projects/`, `craft/`, `ops/` are shareable. See docs/DISTILL.md.
+- **`personal` (feature 1)** — created at init, exactly one, members: you. From your user, for your user: profile, feedback, craft, ops, cross-project learnings. Syncs across your own devices (LAN free, relay paid). The binary refuses to add members or move its entries to a project space — non-shareable by construction, not by convention.
+- **`project` (feature 2)** — one per project, created/joined via `lore project init` in the repo (binding suggested from the git remote URL). Holds knowledge about that codebase: architecture decisions, constraints, gotchas, corrected conclusions. Shareable: members exchange invites; LAN sync free, cross-network sync via relay (paid, except the free tier: one project shared with one collaborator).
+- **Routing rule (capture)**: when a session distills learnings, each entry is classified — about the user → `personal`; about the codebase → the CWD's project space; ambiguous → `personal` (safe side). See docs/DISTILL.md.
+- **Scoping rule (retrieval)**: `lore_search` defaults to `personal` + the current project's space (detected from CWD); other project spaces are opt-in per query.
 - Membership changes are signed by an owner. v1 keeps a simple signed member-list document; no fancy group-key rotation initially (rotate space_key manually on member removal).
 
 **Store**: SQLite at `~/.lore/lore.db` (entries, spaces, peers, sync state). The distill directory is a *materialized view*: lore renders the `personal` space (and any space the user opts in) to `~/.claude/distill/` files, and watches that directory for writes made by `/distill`, importing changes back as entry versions. Conflict rule: last-writer-wins per entry by (updated_at, author pubkey) — good enough for v1; entries are append-mostly.
