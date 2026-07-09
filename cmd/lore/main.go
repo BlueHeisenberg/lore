@@ -298,6 +298,12 @@ func cmdPut(args []string) error {
 			return err
 		}
 		body = string(b)
+	case len(pos) == 1 && pos[0] == "-":
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		body = string(b)
 	case len(pos) > 0:
 		body = strings.Join(pos, " ")
 	}

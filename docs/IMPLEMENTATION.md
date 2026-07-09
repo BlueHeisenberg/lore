@@ -151,7 +151,7 @@ GET  /lore/v1/hello                      {device_id, account_id, name, version}
 POST /lore/v1/spaces                     body: [blinded_space_id...] -> intersection (blind = HMAC-SHA256(space_key, "lore-blind" || space_id))
 POST /lore/v1/sync                       body: {blinded_space_id, vv: {device_id: max_seq}}
                                          resp: {vv, entries: [full entries the caller lacks], member_docs: [...]}
-POST /lore/v1/entries                    body: {blinded_space_id, entries: [...]} (push direction)
+POST /lore/v1/entries                    body: {blinded_space_id, entries: [...], member_docs: [...]} (push direction; docs travel with entries so a push-before-pull peer can verify membership — docs are always applied first)
 POST /lore/v1/enroll                     enrollment handshake (code-gated)
 POST /lore/v1/invite                     LAN invite handshake (code-gated, fingerprint confirm)
 ```

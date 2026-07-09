@@ -65,6 +65,7 @@ type Daemon struct {
 	distillDir string
 	watcher    *distill.Watcher
 	renderMu   sync.Mutex
+	relay      *RelayRunner
 
 	mu       sync.Mutex
 	lastSync time.Time
@@ -196,6 +197,13 @@ func (d *Daemon) Start() error {
 		}
 	}
 
+	// Relay loop (no-op unless config.json sets relay_url).
+	if rr, err := StartRelay(ctx, d.home, d.opts.Logf); err != nil {
+		d.opts.Logf("relay disabled: %v", err)
+	} else if rr != nil {
+		d.relay = rr
+	}
+
 	d.wg.Add(1)
 	go d.loop(ctx)
 	return nil
@@ -238,6 +246,9 @@ func (d *Daemon) Stop(ctx context.Context) {
 	}
 	if d.watcher != nil {
 		_ = d.watcher.Close()
+	}
+	if d.relay != nil {
+		d.relay.Stop()
 	}
 	d.shutdownServers(ctx)
 	d.wg.Wait()

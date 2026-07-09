@@ -28,6 +28,7 @@ import (
 
 	"github.com/BlueHeisenberg/lore/internal/keys"
 	"github.com/BlueHeisenberg/lore/internal/relayclient"
+	"github.com/BlueHeisenberg/lore/internal/space"
 	"github.com/BlueHeisenberg/lore/internal/store"
 	"github.com/BlueHeisenberg/lore/internal/syncproto"
 )
@@ -270,13 +271,23 @@ func (r *RelayRunner) spaceLoop(ctx context.Context, sp store.Space) {
 	blinded := syncproto.BlindSpaceID(sp.SpaceKey, sp.SpaceID)
 	backoff := relayBackoffMin
 	registered := false
+	owned := false // we own the relay-side space row (register didn't conflict)
+	granted := map[string]bool{}
 	for ctx.Err() == nil {
 		err := func() error {
 			if !registered {
-				if err := r.client.RegisterSpace(ctx, blinded); err != nil && !relayclient.IsConflict(err) {
+				switch err := r.client.RegisterSpace(ctx, blinded); {
+				case err == nil:
+					owned = true
+				case relayclient.IsConflict(err):
+					// owned by another account (shared space) — proceed on granted access
+				default:
 					return fmt.Errorf("register: %w", err)
-				} // conflict: owned by another account (shared space) — proceed on granted access
+				}
 				registered = true
+			}
+			if owned {
+				r.reconcileGrants(ctx, sp, blinded, granted)
 			}
 
 			pushed, err := relayclient.PushSpace(ctx, r.client, r.db, sp)
@@ -330,6 +341,37 @@ func (r *RelayRunner) spaceLoop(ctx context.Context, sp store.Space) {
 		// No idle sleep needed: PullSpace long-polled relayPollWait, so each
 		// healthy round is naturally paced and wakes instantly on remote
 		// appends; local writes ride the next round (<= relayPollWait away).
+	}
+}
+
+// reconcileGrants makes the relay's access list follow the space's verified
+// member list: for an owned shared space, every member account gets a relay
+// grant so its devices can read/append the log. Grants for members who
+// haven't enrolled on the relay yet fail (relay requires a known account) and
+// are retried on later rounds; successes are cached for the runner's
+// lifetime. Revocation is NOT handled here — removing a member rotates the
+// space_key (new blinded id) per the v1 design, which strands the old space
+// row rather than un-granting it.
+func (r *RelayRunner) reconcileGrants(ctx context.Context, sp store.Space, blinded string, granted map[string]bool) {
+	if sp.Kind != "shared" {
+		return
+	}
+	raws, err := syncproto.RawMemberDocs(r.db, sp.SpaceID)
+	if err != nil {
+		return
+	}
+	doc, ok := space.LatestDoc(sp.SpaceID, raws)
+	if !ok {
+		return
+	}
+	for _, m := range doc.Members {
+		if m.AccountPub == r.account.AccountID() || granted[m.AccountPub] {
+			continue
+		}
+		if err := r.client.Grant(ctx, blinded, m.AccountPub); err == nil || relayclient.IsConflict(err) {
+			granted[m.AccountPub] = true
+			r.logf("relay: granted %s access to space %s", m.AccountPub[:12], sp.Name)
+		}
 	}
 }
 

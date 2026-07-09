@@ -175,14 +175,29 @@ func (s *Server) handleSearch(_ context.Context, req mcplib.CallToolRequest) (*m
 			return errResult("unknown space %q (try lore_spaces)", spaceArg)
 		}
 		spaces = []string{sp.SpaceID}
-	case scope == "all":
-		// no space filter
+	case scope == "all", scope == "all-mine":
+		// no space filter: locally-present spaces are exactly the readable set
 	case scope == "project":
 		sp, ok := s.cwdProjectSpace()
 		if !ok {
 			return textResult("no results: the current directory has no project space (scope=project)")
 		}
 		spaces = []string{sp.SpaceID}
+	case scope == "linked":
+		sp, ok := s.cwdProjectSpace()
+		if !ok {
+			return textResult("no results: the current directory has no project space (scope=linked)")
+		}
+		spaces = []string{sp.SpaceID}
+		if links, err := s.st.Links(sp.SpaceID); err == nil {
+			for _, id := range links {
+				// links are retrieval hints, never access grants: only spaces
+				// we actually hold locally (i.e. are a member of) are queried
+				if _, err := s.st.GetSpace(id); err == nil && !containsStr(spaces, id) {
+					spaces = append(spaces, id)
+				}
+			}
+		}
 	default:
 		spaces = s.defaultScope()
 	}

@@ -68,19 +68,15 @@ func DecryptDelta(spaceKey []byte, blindedID string, blob []byte) (Delta, error)
 	return d, nil
 }
 
-// ApplyDelta runs the verified receive path on a decrypted delta: per entry
-// signature check against the origin device, membership check, LWW apply
-// (syncproto.ApplyEntries — the exact path LAN sync uses), then member-doc
-// inserts. Returns how many entry versions were applied.
+// ApplyDelta runs the verified receive path on a decrypted delta — the exact
+// path LAN sync uses: member docs first (chain-verified via MergeMemberDocs,
+// so entries in the same delta are checked against the docs they arrived
+// with), then per-entry signature check against the origin device,
+// role-checked membership (MemberDocCheck), LWW apply. Returns how many
+// entry versions were applied.
 func ApplyDelta(st *store.Store, db *sql.DB, sp store.Space, d Delta, ownAccount string) (int, error) {
-	applied, err := syncproto.ApplyEntries(st, sp, d.Entries, syncproto.DefaultMemberCheck(ownAccount))
-	if err != nil {
-		return applied, err
+	if err := syncproto.MergeMemberDocs(db, sp.SpaceID, d.MemberDocs); err != nil {
+		return 0, err
 	}
-	for _, doc := range d.MemberDocs {
-		if err := syncproto.InsertMemberDoc(db, sp.SpaceID, doc); err != nil {
-			return applied, err
-		}
-	}
-	return applied, nil
+	return syncproto.ApplyEntries(st, sp, d.Entries, syncproto.MemberDocCheck(db, ownAccount))
 }
