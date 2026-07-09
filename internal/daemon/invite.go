@@ -288,35 +288,57 @@ func (inv *Inviter) handleJoin(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+// errAlreadyMember reports an admit attempt for an account that is already
+// in the member list (idempotency signal for the invite-link claim loop).
+var errAlreadyMember = errors.New("account is already a member")
+
+// admitMember appends the signed member-doc version that adds accountPub
+// (with its bound encryption key and role) to sp's member list, the owner's
+// space_key wrapped to the new member inside the doc. Shared by the LAN
+// invite handshake and the relay invite-link claim processor. Returns the
+// new doc; errAlreadyMember when the account is already listed.
+func admitMember(st *store.Store, account *keys.Account, sp store.Space,
+	accountPub, encPub, role string) (space.MemberDoc, error) {
+
+	latest, ok, err := st.LatestMemberDoc(sp.SpaceID)
+	if err != nil {
+		return space.MemberDoc{}, err
+	}
+	if !ok {
+		return space.MemberDoc{}, fmt.Errorf("space %s lost its verified member list", sp.Name)
+	}
+	if _, already := latest.Member(accountPub); already {
+		return space.MemberDoc{}, fmt.Errorf("%w: %s in %s", errAlreadyMember, shortID(accountPub), sp.Name)
+	}
+	wrapped, err := space.WrapSpaceKey(sp.SpaceKey, encPub)
+	if err != nil {
+		return space.MemberDoc{}, err
+	}
+	signPriv, err := account.SigningKey()
+	if err != nil {
+		return space.MemberDoc{}, err
+	}
+	members := append(append([]space.Member(nil), latest.Members...), space.Member{
+		AccountPub: accountPub, EncPub: encPub, Role: role, WrappedSpaceKey: wrapped,
+	})
+	next, err := space.Evolve(latest, members, account.AccountID(), signPriv)
+	if err != nil {
+		return space.MemberDoc{}, err
+	}
+	if err := st.AddMemberDoc(sp.SpaceID, next); err != nil {
+		return space.MemberDoc{}, err
+	}
+	return next, nil
+}
+
 // admit appends the member-doc version naming the invitee and seals the
 // invite payload to the invitee's encryption key.
 func (inv *Inviter) admit(req syncproto.JoinRequest) (string, int64, error) {
-	latest, ok, err := inv.st.LatestMemberDoc(inv.sp.SpaceID)
+	next, err := admitMember(inv.st, inv.account, inv.sp, req.AccountPub, req.EncPub, inv.role)
 	if err != nil {
-		return "", 0, err
-	}
-	if !ok {
-		return "", 0, fmt.Errorf("space %s lost its verified member list", inv.sp.Name)
-	}
-	if _, already := latest.Member(req.AccountPub); already {
-		return "", 0, fmt.Errorf("account %s is already a member of %s", shortID(req.AccountPub), inv.sp.Name)
-	}
-	wrapped, err := space.WrapSpaceKey(inv.sp.SpaceKey, req.EncPub)
-	if err != nil {
-		return "", 0, err
-	}
-	signPriv, err := inv.account.SigningKey()
-	if err != nil {
-		return "", 0, err
-	}
-	members := append(append([]space.Member(nil), latest.Members...), space.Member{
-		AccountPub: req.AccountPub, EncPub: req.EncPub, Role: inv.role, WrappedSpaceKey: wrapped,
-	})
-	next, err := space.Evolve(latest, members, inv.account.AccountID(), signPriv)
-	if err != nil {
-		return "", 0, err
-	}
-	if err := inv.st.AddMemberDoc(inv.sp.SpaceID, next); err != nil {
+		if errors.Is(err, errAlreadyMember) {
+			return "", 0, fmt.Errorf("account %s is already a member of %s", shortID(req.AccountPub), inv.sp.Name)
+		}
 		return "", 0, err
 	}
 

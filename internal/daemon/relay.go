@@ -218,6 +218,10 @@ func (r *RelayRunner) managePass(ctx context.Context) error {
 			go r.spaceLoop(ctx, sp)
 		}
 	}
+	// Invite-link claims: admit joiners whose claims are parked on the relay.
+	if err := r.processInviteClaims(ctx); err != nil {
+		return err
+	}
 	return r.refreshKeybox(ctx)
 }
 

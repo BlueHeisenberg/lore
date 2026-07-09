@@ -112,6 +112,23 @@ CREATE TABLE IF NOT EXISTS snapshots(
   size       INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
+-- Invite links: opaque encrypted payloads parked at a secret-derived
+-- address, plus the joiners' encrypted claims awaiting the owner's daemon.
+CREATE TABLE IF NOT EXISTS invites(
+  addr          TEXT PRIMARY KEY,
+  owner_account TEXT NOT NULL,
+  blob          BLOB NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  max_uses      INTEGER NOT NULL,
+  uses          INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS invite_claims(
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  addr       TEXT NOT NULL,
+  claim      BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
 -- Stored bytes per account: all log + snapshot blobs of spaces the account
 -- OWNS (members' appends bill the owner) plus the account keybox.
 CREATE VIEW IF NOT EXISTS account_usage AS

@@ -12,8 +12,11 @@ import (
 
 // --- auth bootstrap ---
 
-// handleChallenge: POST /v1/challenge {device_pub} -> {nonce}.
+// handleChallenge: POST /v1/challenge {device_pub} -> {nonce}. Also hosts
+// the throttled invite expiry sweep, next to the opportunistic nonce sweep
+// that challenges.issue performs.
 func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
+	s.maybeSweepInvites()
 	var req struct {
 		DevicePub string `json:"device_pub"`
 	}

@@ -64,6 +64,12 @@ type Server struct {
 
 	// keyboxLimiter guards the unauthenticated GET /v1/accounts/{handle}/keybox.
 	keyboxLimiter *rateLimiter
+	// inviteLimiter guards the unauthenticated GET /v1/invites/{addr}.
+	inviteLimiter *rateLimiter
+
+	// invite expiry sweep throttle (piggybacks on challenge traffic).
+	inviteSweepMu   sync.Mutex
+	lastInviteSweep time.Time
 
 	// long-poll wakeups: one broadcast channel per blinded_id, closed and
 	// replaced on every append.
@@ -90,6 +96,7 @@ func NewServer(cfg Config, logger *log.Logger) (*Server, error) {
 		cfg:           cfg,
 		logger:        logger,
 		keyboxLimiter: newRateLimiter(5),
+		inviteLimiter: newRateLimiter(10),
 		pollChan:      make(map[string]chan struct{}),
 	}, nil
 }
@@ -138,6 +145,12 @@ func (s *Server) appendSignal(blindedID string) <-chan struct{} {
 //	POST   /v1/account/handle                     (auth)   claim handle
 //	GET    /v1/accounts/{handle}                  (open)   handle -> account_pub
 //	GET    /v1/accounts/{handle}/keybox           (open, 5/min/IP) keybox for fresh login
+//	POST   /v1/invites                            (auth)   park an invite-link blob
+//	GET    /v1/invites/claims                     (auth)   pending claims on own invites
+//	GET    /v1/invites/{addr}                     (open, 10/min/IP) fetch invite blob
+//	POST   /v1/invites/{addr}/claims              (auth)   park a join claim
+//	POST   /v1/invites/{addr}/processed           (auth)   owner: drop processed claims
+//	DELETE /v1/invites/{addr}                     (auth)   owner: revoke
 //	POST   /v1/stripe/webhook                     (Stripe sig) plan transitions
 //
 // (sig*) = challenge-signed by the enrolling device key + account_sig by the
@@ -162,6 +175,13 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /v1/accounts/{handle}", s.handleResolveHandle)
 	mux.HandleFunc("GET /v1/accounts/{handle}/keybox", s.handleHandleKeybox)
+
+	mux.Handle("POST /v1/invites", s.authed(s.handleCreateInvite, true))
+	mux.Handle("GET /v1/invites/claims", s.authed(s.handleListInviteClaims, true))
+	mux.HandleFunc("GET /v1/invites/{addr}", s.handleGetInvite)
+	mux.Handle("POST /v1/invites/{addr}/claims", s.authed(s.handlePostInviteClaim, true))
+	mux.Handle("POST /v1/invites/{addr}/processed", s.authed(s.handleInviteProcessed, true))
+	mux.Handle("DELETE /v1/invites/{addr}", s.authed(s.handleRevokeInvite, true))
 
 	mux.HandleFunc("POST /v1/stripe/webhook", s.handleStripeWebhook)
 

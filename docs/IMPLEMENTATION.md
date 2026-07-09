@@ -175,6 +175,15 @@ API exactly as RELAY.md protocol section. Additions pinned here:
 - Entitlements: `accounts.plan` (`free|paid|trial`). Set by: Stripe webhook (`/v1/stripe/webhook`, signature-verified, handles checkout.session.completed, customer.subscription.updated/deleted) OR `lore-relay admin set-plan <account> <plan>` for local testing. Stripe keys via env; unset = webhook 503, admin path only.
 - Config env: `LORE_RELAY_ADDR` (:8480), `LORE_RELAY_DATA`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`, `LORE_RELAY_QUOTA_MB`.
 
+### Invite links (internal/invite + relay routes)
+
+Async bearer-token invites; the LAN handshake stays as the no-relay path (`lore space invite --lan`).
+
+- **Token**: 4 words from an embedded BIP39 English list (2048 words) + 2-digit number, e.g. `maple-rocket-sunset-cactus-73` (~50.6 bits). Parsing is case/separator-insensitive, accepts unique 4-letter prefixes. From S = canonical string: `addr = hex(HMAC-SHA256(S,"lore-invite-addr"))[:32]`, XChaCha20-Poly1305 key = `HMAC-SHA256(S,"lore-invite-key")`, claim MAC = `HMAC-SHA256(S,"lore-invite-claim"||account_pub)`. Payload blobs use AAD=addr; claim blobs AAD=addr+"claim".
+- **Trust model**: the token is a bearer capability — anyone holding it can join until expiry/exhaustion, so it must travel over a channel the owner trusts. Caps keep the blast radius small: expiry clamped to **6h** (default 6h), uses clamped to **10** (default **single-use**), ≤20 open invites per account. The relay hosts only ciphertext at an unguessable address: it never sees the secret, the space id/name, or keys. The owner's daemon verifies each claim (AEAD + token MAC + enc-key binding) before admitting.
+- **Routes**: `POST /v1/invites` (authed; {addr, blob b64, expires_in_s, max_uses}, clamped) · `GET /v1/invites/{addr}` (open, 10/min/IP — possessing addr implies possessing the secret; 404 when expired/exhausted) · `POST /v1/invites/{addr}/claims` (authed; uses counts claims) · `GET /v1/invites/claims` (authed; pending claims on own invites) · `POST /v1/invites/{addr}/processed` + `DELETE /v1/invites/{addr}` (authed, owner). Expired rows swept alongside challenge traffic.
+- **Flow**: `lore space invite <space>` (default when relay_url is set) mints the token, parks the encrypted `{space_id, space_key, kind/name/project_ref, role, owner keys}` payload, and records the secret locally (`lore space invites` lists/revokes). `lore join <token>` fetches+decrypts, stores the space, enrolls with the relay, parks its claim, and polls ~30s; if the owner's daemon is offline it exits pending and the daemons complete membership later. The owner's relay loop verifies claims, evolves the member doc (same admit path as the LAN invite), grants relay access, pushes a doc-only delta, and deletes used single-use invites.
+
 ## MCP (internal/mcpserver)
 
 Direct-DB mode (WAL makes multi-process safe); after writes, poke the daemon's admin API (`POST 127.0.0.1:<port>/admin/sync?token=`) if daemon.json exists — fire-and-forget. Tools:
