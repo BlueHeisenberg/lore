@@ -185,8 +185,20 @@ func (s *Store) PutEntry(p PutParams) (Entry, error) {
 	if !validEnum(p.Origin, Origins) {
 		return Entry{}, fmt.Errorf("invalid origin %q", p.Origin)
 	}
-	if _, err := s.GetSpace(p.SpaceID); err != nil {
+	sp, err := s.GetSpace(p.SpaceID)
+	if err != nil {
 		return Entry{}, fmt.Errorf("space %s: %w", p.SpaceID, err)
+	}
+	// Local-write membership rule (contract: checked on both write and
+	// sync-receive): once a shared space has a verified member list, only
+	// writer/owner accounts may author entries into it. Shared spaces
+	// without any member doc (pre-membership) stay writable locally.
+	if sp.Kind == "shared" {
+		if doc, ok, err := s.LatestMemberDoc(sp.SpaceID); err != nil {
+			return Entry{}, err
+		} else if ok && !doc.CanWrite(s.signer.AccountID) {
+			return Entry{}, fmt.Errorf("space %s: %w", sp.Name, ErrNotWriter)
+		}
 	}
 
 	now := tsNow()

@@ -141,26 +141,31 @@ func (d *Daemon) syncSpace(ctx context.Context, p syncproto.Peer, base, blinded 
 		syncproto.SyncRequest{BlindedSpaceID: blinded, VV: localVV}, &resp); err != nil {
 		return 0, err
 	}
+	// Member docs BEFORE entries: applying shared-space entries requires the
+	// verified member list, which may arrive in the same response.
+	if err := syncproto.MergeMemberDocs(d.db, sp.SpaceID, resp.MemberDocs); err != nil {
+		return 0, err
+	}
 	applied, err := syncproto.ApplyEntries(d.st, sp, resp.Entries,
-		syncproto.DefaultMemberCheck(d.account.AccountID()))
+		syncproto.MemberDocCheck(d.db, d.account.AccountID()))
 	if err != nil {
 		return applied, err
 	}
-	for _, doc := range resp.MemberDocs {
-		if err := syncproto.InsertMemberDoc(d.db, sp.SpaceID, doc); err != nil {
-			return applied, err
-		}
-	}
 
-	// Push: everything the peer's vv does not cover.
+	// Push: everything the peer's vv does not cover, docs alongside so a
+	// receiver that never pulled from us can still verify membership.
 	missing, err := syncproto.EntriesSince(d.db, sp.SpaceID, resp.VV)
 	if err != nil {
 		return applied, err
 	}
 	if len(missing) > 0 {
+		docs, err := syncproto.MemberDocs(d.db, sp.SpaceID)
+		if err != nil {
+			return applied, err
+		}
 		var pushResp syncproto.EntriesResponse
 		if err := d.doJSON(ctx, p.DeviceID, http.MethodPost, base+"/lore/v1/entries",
-			syncproto.EntriesRequest{BlindedSpaceID: blinded, Entries: missing}, &pushResp); err != nil {
+			syncproto.EntriesRequest{BlindedSpaceID: blinded, Entries: missing, MemberDocs: docs}, &pushResp); err != nil {
 			return applied, err
 		}
 	}

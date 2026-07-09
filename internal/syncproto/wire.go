@@ -64,9 +64,13 @@ type SyncResponse struct {
 }
 
 // EntriesRequest is the body of POST /lore/v1/entries (push direction).
+// MemberDocs carries the sender's member-doc chain so a receiver that has
+// not pulled yet can verify membership before applying pushed entries
+// (additive to the pinned contract body; docs are verified before storage).
 type EntriesRequest struct {
 	BlindedSpaceID string        `json:"blinded_space_id"`
 	Entries        []store.Entry `json:"entries"`
+	MemberDocs     []MemberDoc   `json:"member_docs,omitempty"`
 }
 
 // EntriesResponse reports how many pushed entries were applied (LWW may
@@ -105,6 +109,48 @@ type EnrollPayload struct {
 type EnrollResponse struct {
 	DeviceID string `json:"device_id"`
 	Name     string `json:"name"`
+}
+
+// InviteInfo is the response of GET /lore/v1/invite?challenge=<hex>, served
+// by the INVITER: its account keys plus an HMAC keyed with the invite code
+// over the challenge and those keys — proving to the invitee that this
+// endpoint is the device whose screen shows the code (same anti-spoof shape
+// as enrollment, direction reversed). Nonce is the inviter-issued session
+// nonce the invitee must echo (and MAC) in the join request.
+type InviteInfo struct {
+	AccountPub string `json:"account_pub"` // hex Ed25519 account signing pubkey
+	EncPub     string `json:"enc_pub"`     // hex X25519 account encryption pubkey
+	EncPubSig  string `json:"enc_pub_sig"` // account-signed enc_pub (keys.Account binding)
+	Nonce      string `json:"nonce"`       // hex session nonce
+	MAC        string `json:"mac"`         // hex HMAC-SHA256(code, challenge||account_pub||enc_pub||nonce)
+}
+
+// JoinRequest is the body of POST /lore/v1/invite: the invitee introduces
+// its account keys, proving code knowledge with an HMAC over the inviter's
+// nonce and the keys, so a LAN spoofer cannot substitute its own keys.
+type JoinRequest struct {
+	AccountPub string `json:"account_pub"`
+	EncPub     string `json:"enc_pub"`
+	EncPubSig  string `json:"enc_pub_sig"` // binds enc_pub to account_pub
+	Name       string `json:"name"`        // invitee display name (device/host)
+	Nonce      string `json:"nonce"`       // echo of InviteInfo.Nonce
+	MAC        string `json:"mac"`         // hex HMAC-SHA256(code, "join"||nonce||account_pub||enc_pub)
+}
+
+// JoinResponse carries the invite payload sealed to the invitee's account
+// encryption key.
+type JoinResponse struct {
+	Box string `json:"box"` // base64(SealAnonymous(json(InvitePayload), invitee enc_pub))
+}
+
+// InvitePayload is the plaintext the inviter seals to the invitee: the space
+// row (space_key STRIPPED — the invitee unwraps its own wrapped copy from
+// the member doc) plus the full member-doc chain including the new version
+// that names the invitee.
+type InvitePayload struct {
+	Space      SpaceRecord `json:"space"`
+	MemberDocs []MemberDoc `json:"member_docs"`
+	Role       string      `json:"role"`
 }
 
 // SpaceRecord is a wire/vault representation of a spaces table row.

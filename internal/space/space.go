@@ -53,6 +53,17 @@ func ProjectRef(remoteURL string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// RepoName returns the repository base name from a git remote URL — the
+// default display name for a project space (e.g. "lore" from
+// git@github.com:BlueHeisenberg/lore.git).
+func RepoName(remoteURL string) string {
+	n := NormalizeRemoteURL(remoteURL)
+	if i := strings.LastIndex(n, "/"); i >= 0 {
+		n = n[i+1:]
+	}
+	return n
+}
+
 // FindProjectRef resolves the project_ref for a working directory: walk up
 // to the enclosing git repo, read remote "origin" from its config (no
 // shelling out), normalize and hash.

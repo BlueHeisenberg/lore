@@ -153,8 +153,14 @@ func (d *Daemon) handleEntries(w http.ResponseWriter, r *http.Request, sender ke
 	if !ok {
 		return
 	}
+	// Member docs first: entry application is judged against the verified
+	// member list, which may arrive in this very request.
+	if err := syncproto.MergeMemberDocs(d.db, sp.SpaceID, req.MemberDocs); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	applied, err := syncproto.ApplyEntries(d.st, sp, req.Entries,
-		syncproto.DefaultMemberCheck(d.account.AccountID()))
+		syncproto.MemberDocCheck(d.db, d.account.AccountID()))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

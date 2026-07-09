@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 
+	"github.com/BlueHeisenberg/lore/internal/space"
 	"github.com/BlueHeisenberg/lore/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -153,6 +154,59 @@ func InsertMemberDoc(db *sql.DB, spaceID string, d MemberDoc) error {
 	_, err := db.Exec(`INSERT OR IGNORE INTO member_docs(space_id,version,doc,sig,signer)
 		VALUES(?,?,?,?,?)`, spaceID, d.Version, d.Doc, d.Sig, d.Signer)
 	return err
+}
+
+// RawMemberDocs returns the member-doc rows in the shape internal/space's
+// chain verification consumes.
+func RawMemberDocs(db *sql.DB, spaceID string) ([]space.RawDoc, error) {
+	docs, err := MemberDocs(db, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	raws := make([]space.RawDoc, len(docs))
+	for i, d := range docs {
+		raws[i] = space.RawDoc{Version: d.Version, Doc: d.Doc, Sig: d.Sig}
+	}
+	return raws, nil
+}
+
+// MergeMemberDocs verifies and stores member docs received from a peer.
+// Existing rows win per version (first writer keeps the slot — honest peers
+// carry identical docs, and a divergent doc could not verify anyway); a new
+// version is inserted only when the COMBINED chain still verifies through
+// it, so a rogue peer cannot park an unauthorized doc at the next version.
+func MergeMemberDocs(db *sql.DB, spaceID string, incoming []MemberDoc) error {
+	if len(incoming) == 0 {
+		return nil
+	}
+	existing, err := RawMemberDocs(db, spaceID)
+	if err != nil {
+		return err
+	}
+	have := make(map[int64]bool, len(existing))
+	for _, r := range existing {
+		have[r.Version] = true
+	}
+	combined := existing
+	candidates := map[int64]MemberDoc{}
+	for _, d := range incoming {
+		if have[d.Version] || candidates[d.Version].Doc != "" {
+			continue
+		}
+		candidates[d.Version] = d
+		combined = append(combined, space.RawDoc{Version: d.Version, Doc: d.Doc, Sig: d.Sig})
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	for _, v := range space.VerifiedDocs(spaceID, combined) {
+		if d, ok := candidates[v.Version]; ok {
+			if err := InsertMemberDoc(db, spaceID, d); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ListSpaceRecords dumps the spaces table (vault / enrollment payload).

@@ -447,10 +447,52 @@ func contains(xs []string, x string) bool {
 	return false
 }
 
+// cwdProjectSpace returns the project space for the CWD, if any.
+func cwdProjectSpace(st *store.Store) (store.Space, bool) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return store.Space{}, false
+	}
+	ref, err := space.FindProjectRef(cwd)
+	if err != nil {
+		return store.Space{}, false
+	}
+	sp, err := st.SpaceByProjectRef(ref)
+	if err != nil {
+		return store.Space{}, false
+	}
+	return sp, true
+}
+
+// linkedScopeSpaces implements scope=linked: the CWD's project space plus
+// its linked spaces. Links are retrieval hints only — a linked space id is
+// included only when the space actually exists locally (which IS local
+// membership: without membership it was never synced here).
+func linkedScopeSpaces(st *store.Store) ([]string, error) {
+	project, ok := cwdProjectSpace(st)
+	if !ok {
+		return nil, errors.New("the current directory has no project space (scope=linked); run `lore project init`")
+	}
+	ids := []string{project.SpaceID}
+	links, err := st.Links(project.SpaceID)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range links {
+		if contains(ids, id) {
+			continue
+		}
+		if _, err := st.GetSpace(id); err == nil { // membership filter
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
 func cmdSearch(args []string) error {
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	spaceArg := fs.String("space", "", "restrict to one space (name or id)")
-	scope := fs.String("scope", "default", "default|all (default: personal + CWD project + pinned)")
+	scope := fs.String("scope", "default", "default|project|linked|all-mine|all (default: personal + CWD project + pinned)")
 	domain := fs.String("domain", "", "filter by domain")
 	marker := fs.String("marker", "", "filter by marker, e.g. IMPORTANT")
 	confidence := fs.String("confidence", "", "filter by confidence")
@@ -482,8 +524,18 @@ func cmdSearch(args []string) error {
 			return fmt.Errorf("space %q: %w", *spaceArg, err)
 		}
 		spaces = []string{sp.SpaceID}
-	case *scope == "all":
-		// no filter
+	case *scope == "all" || *scope == "all-mine":
+		// no filter: locally-present spaces ARE this account's memberships
+	case *scope == "project":
+		sp, ok := cwdProjectSpace(st)
+		if !ok {
+			return errors.New("the current directory has no project space (scope=project); run `lore project init`")
+		}
+		spaces = []string{sp.SpaceID}
+	case *scope == "linked":
+		if spaces, err = linkedScopeSpaces(st); err != nil {
+			return err
+		}
 	default:
 		spaces = defaultScopeSpaces(st)
 	}
@@ -538,8 +590,15 @@ func cmdSpaces(args []string) error {
 		if sp.Pinned {
 			extra += "  pinned"
 		}
+		members := 1
+		if sp.Kind == "shared" {
+			if doc, ok, err := st.LatestMemberDoc(sp.SpaceID); err == nil && ok {
+				members = len(doc.Members)
+			}
+		}
 		entries, _ := st.ListEntries(sp.SpaceID)
-		fmt.Printf("%-12s %-8s %s  %d entries%s\n", sp.Name, sp.Kind, sp.SpaceID, len(entries), extra)
+		fmt.Printf("%-12s %-8s %s  %d entries  %d member(s)%s\n",
+			sp.Name, sp.Kind, sp.SpaceID, len(entries), members, extra)
 	}
 	return nil
 }
