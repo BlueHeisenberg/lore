@@ -28,6 +28,7 @@ type Config struct {
 	Addr                string // LORE_RELAY_ADDR (default :8480)
 	DataDir             string // LORE_RELAY_DATA
 	QuotaMB             int64  // LORE_RELAY_QUOTA_MB (default 100)
+	TrialDays           int64  // LORE_RELAY_TRIAL_DAYS (default 30; 0 = trials never expire, dev only)
 	StripeSecretKey     string // STRIPE_SECRET_KEY (unused server-side beyond presence)
 	StripeWebhookSecret string // STRIPE_WEBHOOK_SECRET (empty = webhook 503)
 	StripePriceID       string // STRIPE_PRICE_ID
@@ -42,6 +43,7 @@ func ConfigFromEnv() Config {
 		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
 		StripePriceID:       os.Getenv("STRIPE_PRICE_ID"),
 		QuotaMB:             100,
+		TrialDays:           30,
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8480"
@@ -49,6 +51,11 @@ func ConfigFromEnv() Config {
 	if v := os.Getenv("LORE_RELAY_QUOTA_MB"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			cfg.QuotaMB = n
+		}
+	}
+	if v := os.Getenv("LORE_RELAY_TRIAL_DAYS"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			cfg.TrialDays = n
 		}
 	}
 	return cfg

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"fmt"
+	"time"
 )
 
 // policyAction names the write being attempted, for plan gating.
@@ -49,7 +50,16 @@ func (s *Server) checkPolicy(ownerAccount string, action policyAction, blindedID
 		}
 	}
 
-	if acct.Plan != "free" {
+	// Effective plan: a trial lapses into free after TrialDays (default 30,
+	// per docs/RELAY.md "one month free trial"). The row keeps saying 'trial'
+	// — only Stripe or the admin CLI rewrite plans — but policy stops honoring
+	// it. TrialDays=0 disables expiry (dev/self-hosted relays).
+	plan := acct.Plan
+	if plan == "trial" && s.cfg.TrialDays > 0 &&
+		time.Now().Unix()-acct.CreatedAt > s.cfg.TrialDays*86400 {
+		plan = "free"
+	}
+	if plan != "free" {
 		return nil // trial/paid: byte quota only
 	}
 
