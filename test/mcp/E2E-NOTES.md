@@ -20,10 +20,10 @@ export LORE_HOME="$SCRATCH/lorehome"
 "$SCRATCH/bin/lore.exe" init --yes-i-saved-it --name mcptest
 
 # 3. distill mirror is OPT-IN since the post-Phase-3 safety fix: `lore init`
-#    writes an EMPTY distill_dir and nothing ever defaults to ~/.claude/distill.
+#    writes an EMPTY mirror_dir and nothing ever defaults to ~/.claude/distill.
 #    To test mirror side effects, point it at a scratch dir explicitly:
 cat > "$LORE_HOME/config.json" <<EOF
-{ "distill_dir": "$SCRATCH/distill-mirror" }
+{ "mirror_dir": "$SCRATCH/distill-mirror" }
 EOF
 
 # 4. seed entries with a distinctive fact
@@ -99,9 +99,9 @@ mirror (`$SCRATCH/distill-mirror/SPINE.md`, `ops/deploy.md`, `ops/incident.md`,
   are `mcp__lore__<tool>`; pass each to `--allowedTools` (space-separated args work).
 - Timeout generously (120s+); each `claude -p` run takes ~15-45s.
 - The MCP server only re-renders distill when `config.json` **explicitly** sets
-  `distill_dir` (it never assumes `~/.claude/distill` on its own) and only when the
+  `mirror_dir` (it never assumes `~/.claude/distill` on its own) and only when the
   write touched the personal space. Since the safety fix, `lore init` writes an
-  empty distill_dir, so step 3 is only needed when testing mirror side effects.
+  empty mirror_dir, so step 3 is only needed when testing mirror side effects.
 - Re-verified 2026-07-09 with the full final binary (read + write in one prompt).
 - Unit tests: `go test ./internal/mcpserver/` (handlers driven directly against a
   temp LORE_HOME; search scoping/filtering, put routing incl. subject=codebase via a

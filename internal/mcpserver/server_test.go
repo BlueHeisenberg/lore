@@ -437,8 +437,8 @@ func TestAfterWriteSideEffects(t *testing.T) {
 	}
 
 	// scratch distill mirror, explicitly configured — never the real one
-	distillDir := t.TempDir()
-	cfg := `{"distill_dir":` + string(mustJSON(t, distillDir)) + `}`
+	mirrorDir := t.TempDir()
+	cfg := `{"mirror_dir":` + string(mustJSON(t, mirrorDir)) + `}`
 	if err := os.WriteFile(filepath.Join(s.home, "config.json"), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -457,15 +457,15 @@ func TestAfterWriteSideEffects(t *testing.T) {
 	default:
 		t.Error("daemon was not poked after personal write")
 	}
-	if _, err := os.Stat(filepath.Join(distillDir, "SPINE.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(mirrorDir, "SPINE.md")); err != nil {
 		t.Errorf("distill mirror not rendered after personal write: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(distillDir, "ops", "deploy.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(mirrorDir, "ops", "deploy.md")); err != nil {
 		t.Errorf("distill mirror missing domain file: %v", err)
 	}
 
 	// shared-space write: pokes daemon but does NOT re-render distill
-	before := mtimeOf(t, filepath.Join(distillDir, "SPINE.md"))
+	before := mtimeOf(t, filepath.Join(mirrorDir, "SPINE.md"))
 	text, isErr = call(t, s.handlePut, map[string]any{
 		"title": "Team fact", "body": "blue-green", "domain": "ops/deploy", "space": "team"})
 	if isErr {
@@ -476,7 +476,7 @@ func TestAfterWriteSideEffects(t *testing.T) {
 	default:
 		t.Error("daemon was not poked after shared write")
 	}
-	if after := mtimeOf(t, filepath.Join(distillDir, "SPINE.md")); !after.Equal(before) {
+	if after := mtimeOf(t, filepath.Join(mirrorDir, "SPINE.md")); !after.Equal(before) {
 		t.Error("distill mirror re-rendered for a non-personal write")
 	}
 	_ = personal

@@ -181,7 +181,7 @@ func (d *Daemon) handleEntries(w http.ResponseWriter, r *http.Request, sender ke
 // The watcher's re-import of rendered files is a no-op because import skips
 // files whose body already matches the entry.
 func (d *Daemon) renderDistill() {
-	if d.distillDir == "" {
+	if d.mirrorDir == "" {
 		return
 	}
 	d.renderMu.Lock()
@@ -190,7 +190,7 @@ func (d *Daemon) renderDistill() {
 	if err != nil {
 		return
 	}
-	if _, err := distill.Render(d.st, personal.SpaceID, d.distillDir); err != nil {
+	if _, err := distill.Render(d.st, personal.SpaceID, d.mirrorDir); err != nil {
 		d.opts.Logf("distill render: %v", err)
 	}
 }

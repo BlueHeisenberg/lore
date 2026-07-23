@@ -124,6 +124,63 @@ func Import(st *store.Store, spaceID, dir string) (ImportResult, error) {
 	return res, nil
 }
 
+// PlanAction says what Import would do with one file.
+type PlanAction string
+
+const (
+	PlanAdd       PlanAction = "add"       // no entry for this domain yet
+	PlanOverwrite PlanAction = "overwrite" // entry exists with DIFFERENT content — import replaces it (new version, LWW syncs everywhere)
+	PlanUnchanged PlanAction = "unchanged" // entry matches the file byte-for-byte
+)
+
+// PlanItem is one file's fate in an ImportPlan.
+type PlanItem struct {
+	Domain string
+	Action PlanAction
+}
+
+// ImportPlan reports what Import would do, without writing anything. Its
+// purpose is the second-device migration: overwrites are where two machines'
+// distill histories collide, and the user should see them before they happen.
+func ImportPlan(st *store.Store, spaceID, dir string) ([]PlanItem, error) {
+	var plan []PlanItem
+	layers, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("distill dir: %w", err)
+	}
+	for _, layer := range layers {
+		if !layer.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(dir, layer.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(strings.ToLower(f.Name()), ".md") || f.Name() == SpineFile {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, layer.Name(), f.Name()))
+			if err != nil {
+				return nil, err
+			}
+			domain := layer.Name() + "/" + strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
+			item := PlanItem{Domain: domain, Action: PlanAdd}
+			if prev, err := st.GetDomain(domain, []string{spaceID}); err != nil {
+				return nil, err
+			} else if len(prev) > 0 {
+				if prev[0].Body == string(raw) {
+					item.Action = PlanUnchanged
+				} else {
+					item.Action = PlanOverwrite
+				}
+			}
+			plan = append(plan, item)
+		}
+	}
+	return plan, nil
+}
+
 // importFile imports a single layer/name.md file; returns false if the
 // entry already matches the file body (no new version written).
 func importFile(st *store.Store, spaceID, dir, path string) (bool, error) {

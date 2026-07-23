@@ -49,7 +49,7 @@ func init() {
 	register("search", "full-text search with filters", cmdSearch)
 	register("spaces", "list spaces", cmdSpaces)
 	register("status", "identity and store summary", cmdStatus)
-	register("distill", "import|render the distill mirror directory", cmdDistill)
+	register("mirror", "import|render the markdown mirror of the personal space", cmdMirror)
 }
 
 func usage() error {
@@ -110,21 +110,21 @@ func loreHome() (string, error) {
 
 // config is LORE_HOME/config.json.
 type config struct {
-	DistillDir string `json:"distill_dir"`
+	MirrorDir string `json:"mirror_dir"`
 }
 
 // loadConfig reads LORE_HOME/config.json. The distill mirror is strictly
-// opt-in: an empty distill_dir means the adapter is off. Nothing in lore may
+// opt-in: an empty mirror_dir means the adapter is off. Nothing in lore may
 // default to the real ~/.claude/distill — pointing lore at a live directory
-// it doesn't own is an explicit user decision (set distill_dir in config.json
+// it doesn't own is an explicit user decision (set mirror_dir in config.json
 // or pass --dir to `lore distill`).
 func loadConfig(loreHome string) config {
 	var cfg config
 	b, err := os.ReadFile(filepath.Join(loreHome, "config.json"))
 	if err == nil {
 		var c config
-		if json.Unmarshal(b, &c) == nil && c.DistillDir != "" {
-			cfg.DistillDir = c.DistillDir
+		if json.Unmarshal(b, &c) == nil && c.MirrorDir != "" {
+			cfg.MirrorDir = c.MirrorDir
 		}
 	}
 	return cfg
@@ -638,17 +638,21 @@ func cmdStatus(args []string) error {
 		total += len(es)
 	}
 	fmt.Printf("spaces   %d (%d entries)\n", len(sps), total)
-	fmt.Printf("distill  %s\n", loadConfig(home).DistillDir)
+	fmt.Printf("mirror   %s\n", loadConfig(home).MirrorDir)
 	return nil
 }
 
-func cmdDistill(args []string) error {
+// cmdMirror manages the markdown mirror of the personal space. `import
+// --dir` also serves as the migration path from an aura-distill directory
+// (same on-disk format).
+func cmdMirror(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lore distill import|render [--dir <distill-dir>]")
+		return errors.New("usage: lore mirror import|render [--dir <dir>] [--dry-run]")
 	}
 	sub, rest := args[0], args[1:]
-	fs := flag.NewFlagSet("distill "+sub, flag.ContinueOnError)
-	dir := fs.String("dir", "", "distill directory (default: config distill_dir)")
+	fs := flag.NewFlagSet("mirror "+sub, flag.ContinueOnError)
+	dir := fs.String("dir", "", "directory (default: config mirror_dir; point --dir at an aura-distill directory to migrate it)")
+	dryRun := fs.Bool("dry-run", false, "import only: report what would happen per file, write nothing")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -657,10 +661,10 @@ func cmdDistill(args []string) error {
 		return err
 	}
 	if *dir == "" {
-		*dir = loadConfig(home).DistillDir
+		*dir = loadConfig(home).MirrorDir
 	}
 	if *dir == "" {
-		return errors.New("no distill_dir configured (set it in config.json or pass --dir)")
+		return errors.New("no mirror_dir configured (set it in config.json or pass --dir)")
 	}
 	st, _, _, err := openStore(home)
 	if err != nil {
@@ -673,6 +677,26 @@ func cmdDistill(args []string) error {
 	}
 	switch sub {
 	case "import":
+		if *dryRun {
+			plan, err := distill.ImportPlan(st, personal.SpaceID, *dir)
+			if err != nil {
+				return err
+			}
+			var counts = map[distill.PlanAction]int{}
+			for _, p := range plan {
+				counts[p.Action]++
+				if p.Action != distill.PlanUnchanged {
+					fmt.Printf("%-9s %s\n", p.Action, p.Domain)
+				}
+			}
+			fmt.Printf("dry-run: %d add, %d overwrite, %d unchanged (from %s)\n",
+				counts[distill.PlanAdd], counts[distill.PlanOverwrite], counts[distill.PlanUnchanged], *dir)
+			if counts[distill.PlanOverwrite] > 0 {
+				fmt.Println("overwrite = an entry for that domain already exists with different content;")
+				fmt.Println("importing makes this file the new current version everywhere (old content is replaced).")
+			}
+			return nil
+		}
 		res, err := distill.Import(st, personal.SpaceID, *dir)
 		if err != nil {
 			return err
@@ -686,6 +710,6 @@ func cmdDistill(args []string) error {
 		fmt.Printf("rendered personal space to %s\n", *dir)
 		return nil
 	default:
-		return fmt.Errorf("unknown distill subcommand %q (import|render)", sub)
+		return fmt.Errorf("unknown mirror subcommand %q (import|render)", sub)
 	}
 }

@@ -44,7 +44,7 @@ func (s *Server) pokeDaemon() {
 }
 
 // maybeRenderDistill re-renders the distill mirror after a personal-space
-// write, but only when config.json explicitly sets distill_dir — the MCP
+// write, but only when config.json explicitly sets mirror_dir — the MCP
 // server never assumes the real ~/.claude/distill on its own. Errors ignored.
 func (s *Server) maybeRenderDistill(spaceID string) {
 	personal, err := s.st.PersonalSpace()
@@ -56,10 +56,10 @@ func (s *Server) maybeRenderDistill(spaceID string) {
 		return
 	}
 	var c struct {
-		DistillDir string `json:"distill_dir"`
+		MirrorDir string `json:"mirror_dir"`
 	}
-	if json.Unmarshal(b, &c) != nil || c.DistillDir == "" {
+	if json.Unmarshal(b, &c) != nil || c.MirrorDir == "" {
 		return
 	}
-	_, _ = distill.Render(s.st, personal.SpaceID, c.DistillDir)
+	_, _ = distill.Render(s.st, personal.SpaceID, c.MirrorDir)
 }

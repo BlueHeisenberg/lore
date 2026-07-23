@@ -38,7 +38,7 @@ configs/             .env.example, cloudflared config, systemd unit, Windows tas
 
 - `LORE_HOME` env overrides the data dir; default `~/.lore`.
 - Files under LORE_HOME: `account.json`, `device.json`, `lore.db`, `blobs/`, `daemon.json` (port+token, written by the daemon, 0600), `config.json`.
-- Distill mirror dir: `~/.claude/distill/` (overridable in config.json `distill_dir`).
+- Mirror dir: opt-in via config.json `mirror_dir` (suggested: `~/.claude/lore/`); the mirror renders the personal space as SPINE.md + domain files. An aura-distill directory is an import source (`lore mirror import --dir`), never a default target.
 
 ## Identity & keys (internal/keys)
 
@@ -109,9 +109,9 @@ LWW: an incoming entry version wins iff (updated_at, author_account) > local's, 
 
 ## Distill adapter (internal/distill)
 
-- Import: parse `distill_dir` — every `layer/name.md` becomes one entry (entry per file, v1): domain = `layer/name`, title = first H1 or filename, body = whole file, markers scraped from body, confidence from frontmatter if present else `validated`, origin `evidence`. SPINE.md itself is NOT an entry (it's derived).
+- Import: parse the import dir (config `mirror_dir` or `--dir`) — every `layer/name.md` becomes one entry (entry per file, v1): domain = `layer/name`, title = first H1 or filename, body = whole file, markers scraped from body, confidence from frontmatter if present else `validated`, origin `evidence`. SPINE.md itself is NOT an entry (it's derived).
 - Render: write the personal space back: one file per entry at `layer/name.md`, regenerate SPINE.md (grouped by layer, one line per entry, ≤80 lines, respecting existing "when to read" line if present in entry metadata... v1: title + first-line description from entry).
-- Watch: fsnotify on distill_dir, 2s debounce, changed file → new entry version (author = this account/device). Loop-guard: renderer writes are recorded (path+mtime+hash) and skipped by the watcher.
+- Watch: fsnotify on mirror_dir, 2s debounce, changed file → new entry version (author = this account/device). Loop-guard: renderer writes are recorded (path+mtime+hash) and skipped by the watcher.
 - Round-trip test: import → render to temp dir → byte-identical modulo SPINE regeneration.
 
 ## CLI surface (cmd/lore)

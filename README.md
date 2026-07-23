@@ -8,7 +8,7 @@ It is the sibling project of [agentmesh](https://github.com/BlueHeisenberg/agent
 
 ## The problem
 
-Every AI session starts from zero. Systems like [aura-distill](https://github.com/tomacco/aura-distill) fix this per-machine: sessions distill learnings into markdown files (a SPINE index + domain files) that future sessions read on startup. But that knowledge is trapped on one machine, in one user's home directory. Switch computers and it's gone. Want a teammate's agent to know what yours learned — no path for that at all.
+Every AI session starts from zero. Session-retrospective systems fix this per-machine: sessions distill learnings into markdown files (a SPINE index + domain files) that future sessions read on startup. But that knowledge is trapped on one machine, in one user's home directory. Switch computers and it's gone. Want a teammate's agent to know what yours learned — no path for that at all.
 
 ## Two kinds of lore
 

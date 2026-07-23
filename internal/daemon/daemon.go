@@ -62,7 +62,7 @@ type Daemon struct {
 	adminPort int
 	token     string
 
-	distillDir string
+	mirrorDir string
 	watcher    *distill.Watcher
 	renderMu   sync.Mutex
 	relay      *RelayRunner
@@ -127,26 +127,26 @@ func New(home string, opts Options) (*Daemon, error) {
 		certHdr:    syncproto.EncodeDeviceCert(device.Cert),
 		reg:        discovery.NewRegistry(device.DeviceID()),
 		poke:       make(chan chan struct{}, 8),
-		distillDir: explicitDistillDir(home),
+		mirrorDir: explicitMirrorDir(home),
 	}
 	return d, nil
 }
 
-// explicitDistillDir returns config.json's distill_dir only when it is
+// explicitMirrorDir returns config.json's mirror_dir only when it is
 // explicitly configured — the daemon must never guess its way into the real
 // ~/.claude/distill on a store that never opted in.
-func explicitDistillDir(home string) string {
+func explicitMirrorDir(home string) string {
 	b, err := os.ReadFile(filepath.Join(home, "config.json"))
 	if err != nil {
 		return ""
 	}
 	var cfg struct {
-		DistillDir string `json:"distill_dir"`
+		MirrorDir string `json:"mirror_dir"`
 	}
 	if json.Unmarshal(b, &cfg) != nil {
 		return ""
 	}
-	return cfg.DistillDir
+	return cfg.MirrorDir
 }
 
 // Start binds the sync and admin listeners, writes daemon.json, starts
@@ -184,12 +184,12 @@ func (d *Daemon) Start() error {
 	}
 
 	// Distill mirror: initial render + watcher, only when configured.
-	if d.distillDir != "" {
+	if d.mirrorDir != "" {
 		if personal, err := d.st.PersonalSpace(); err == nil {
-			rec, err := distill.Render(d.st, personal.SpaceID, d.distillDir)
+			rec, err := distill.Render(d.st, personal.SpaceID, d.mirrorDir)
 			if err != nil {
 				d.opts.Logf("distill render: %v", err)
-			} else if w, err := distill.Watch(d.st, personal.SpaceID, d.distillDir, rec, 0); err != nil {
+			} else if w, err := distill.Watch(d.st, personal.SpaceID, d.mirrorDir, rec, 0); err != nil {
 				d.opts.Logf("distill watch: %v", err)
 			} else {
 				d.watcher = w
