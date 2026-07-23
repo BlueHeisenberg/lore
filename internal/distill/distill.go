@@ -223,8 +223,9 @@ func Render(st *store.Store, spaceID, dir string) (*RenderRecord, error) {
 			return nil, err
 		}
 	}
-	spine := renderSpine(entries)
 	spinePath := filepath.Join(dir, SpineFile)
+	existing, _ := os.ReadFile(spinePath)
+	spine := patchSpine(existing, entries)
 	rec.record(spinePath, spine)
 	if cur, err := os.ReadFile(spinePath); err != nil || string(cur) != string(spine) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -259,7 +260,101 @@ func firstBodyLine(body string) string {
 
 const spineMaxLines = 80
 
-// renderSpine builds SPINE.md: grouped by layer, one pointer line per entry
+// patchSpine reconciles an existing SPINE.md with the live entry set instead
+// of regenerating it. A SPINE is hand-curated — custom section names, "when
+// to read" phrasing, deliberate ordering ARE the retrieval index's value —
+// so every human-authored line survives verbatim: pointer lines whose entry
+// no longer exists are dropped, entries without a pointer line are appended
+// under the section whose header mentions their layer (or a new section),
+// and nothing else is touched. Regeneration from scratch happens only when
+// there is no SPINE to preserve. (Rule learned from real data loss: lore
+// must never flatten a curated SPINE.)
+func patchSpine(existing []byte, entries []store.Entry) []byte {
+	if len(strings.TrimSpace(string(existing))) == 0 {
+		return renderSpine(entries)
+	}
+	live := map[string]bool{}
+	for _, e := range entries {
+		live[e.Domain+".md"] = true
+	}
+	linked := map[string]bool{}
+	lines := strings.Split(strings.TrimRight(string(existing), "\n"), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if p := pointerPath(l); p != "" {
+			if !live[p] {
+				continue // entry deleted → drop its pointer line
+			}
+			linked[p] = true
+		}
+		kept = append(kept, l)
+	}
+	for _, e := range entries {
+		p := e.Domain + ".md"
+		if linked[p] {
+			continue
+		}
+		layer, _, ok := strings.Cut(e.Domain, "/")
+		if !ok {
+			layer = "misc"
+		}
+		line := fmt.Sprintf("- [%s](%s)", e.Title, p)
+		if desc := firstBodyLine(e.Body); desc != "" {
+			line += " — " + desc
+		}
+		kept = insertUnderLayer(kept, layer, line)
+	}
+	return []byte(strings.Join(kept, "\n") + "\n")
+}
+
+var pointerRe = regexp.MustCompile(`^\s*[-*]\s*\[[^\]]*\]\(([^)]+\.md)\)`)
+
+// pointerPath extracts the .md link target of a SPINE pointer line ("" if
+// the line is not a pointer).
+func pointerPath(line string) string {
+	m := pointerRe.FindStringSubmatch(line)
+	if m == nil {
+		return ""
+	}
+	return strings.TrimPrefix(m[1], "./")
+}
+
+// insertUnderLayer appends line at the end of the last "## " section whose
+// header mentions layer (case-insensitive); creates a new section when none
+// matches.
+func insertUnderLayer(lines []string, layer, line string) []string {
+	lower := strings.ToLower(layer)
+	secStart := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "## ") && strings.Contains(strings.ToLower(l), lower) {
+			secStart = i
+		}
+	}
+	if secStart == -1 {
+		out := append([]string(nil), lines...)
+		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+			out = append(out, "")
+		}
+		return append(out, "## "+layer, line)
+	}
+	end := len(lines)
+	for i := secStart + 1; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "## ") {
+			end = i
+			break
+		}
+	}
+	ins := end
+	for ins > secStart+1 && strings.TrimSpace(lines[ins-1]) == "" {
+		ins--
+	}
+	out := append([]string(nil), lines[:ins]...)
+	out = append(out, line)
+	return append(out, lines[ins:]...)
+}
+
+// renderSpine builds SPINE.md from scratch (no existing SPINE to preserve):
+// grouped by layer, one pointer line per entry
 // ("- [Title](layer/name.md) — first body line"), capped at 80 lines.
 func renderSpine(entries []store.Entry) []byte {
 	byLayer := map[string][]store.Entry{}
