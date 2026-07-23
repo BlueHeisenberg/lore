@@ -34,6 +34,7 @@ type Options struct {
 	LAN          bool          // bind 0.0.0.0 and advertise/browse LAN interfaces
 	NoMDNS       bool          // disable discovery entirely (tests, static-peer-only setups)
 	AdminPort    int           // admin API port on 127.0.0.1 (0 = ephemeral)
+	SyncPort     int           // fixed mTLS sync port (0 = ephemeral); required for static peers across VPNs like Tailscale, where the address must survive restarts
 	SyncInterval time.Duration // default 30s
 	Logf         func(format string, args ...any)
 }
@@ -156,7 +157,7 @@ func (d *Daemon) Start() error {
 	d.cancel = cancel
 
 	// mTLS sync server.
-	d.server = &transport.Server{Cert: d.cert, Handler: d.syncHandler()}
+	d.server = &transport.Server{Cert: d.cert, Handler: d.syncHandler(), Port: d.opts.SyncPort}
 	port, err := d.server.Start(d.opts.LAN)
 	if err != nil {
 		cancel()

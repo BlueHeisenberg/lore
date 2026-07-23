@@ -19,6 +19,7 @@ func cmdServe(args []string) error {
 	lan := fs.Bool("lan", false, "advertise/browse on LAN interfaces and bind 0.0.0.0 (default: loopback only)")
 	adminPort := fs.Int("admin-port", 0, "admin API port on 127.0.0.1 (default: ephemeral)")
 	noMDNS := fs.Bool("no-mdns", false, "disable mDNS discovery (static peers only)")
+	port := fs.Int("port", 0, "fixed mTLS sync port (default: ephemeral); set one when peers reach you via a static address, e.g. over Tailscale")
 	interval := fs.Duration("interval", 30*time.Second, "sync interval")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -31,6 +32,7 @@ func cmdServe(args []string) error {
 		LAN:          *lan,
 		NoMDNS:       *noMDNS,
 		AdminPort:    *adminPort,
+		SyncPort:     *port,
 		SyncInterval: *interval,
 		Logf: func(format string, a ...any) {
 			fmt.Fprintf(os.Stderr, "lore serve: "+format+"\n", a...)
