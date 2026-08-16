@@ -20,7 +20,7 @@ Design document. Everything here is pre-implementation and revisable.
 
 - **`lore init`** (free, local): generates the account keypair + this device's key, creates the `personal` space, prints the recovery code once. No email, no username, no server. The account IS the keypair. The recovery code MUST be confirmed by re-typing it before init completes (converts "yeah, next" into actually-saved); the CLI suggests a password manager and offers the recovery kit as a downloadable file.
 - **Second device (free)**: `lore enroll` on the new device shows a short code/QR; `lore approve <code>` on an existing device signs the new device key and hands over wrapped space keys.
-- **`lore signup`** (relay tier): pick a public handle (`@david`), set a passphrase; client uploads the public key, handle→pubkey mapping, and the keybox. Email exists only inside Stripe for billing — the relay's crypto layer never sees it.
+- **`lore signup`** (relay tier): pick a public handle (`@alice`), set a passphrase; client uploads the public key, handle→pubkey mapping, and the keybox. Email exists only inside Stripe for billing — the relay's crypto layer never sees it.
 
 ## Invites — sharing a space with someone
 

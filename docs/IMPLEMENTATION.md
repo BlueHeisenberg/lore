@@ -90,7 +90,45 @@ CREATE TABLE relay_state(space_id TEXT PRIMARY KEY, log_offset INTEGER);
 CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT);
 ```
 
-Canonical entry encoding for signing: JSON with keys sorted, no insignificant whitespace, fields: entry_id, space_id, domain, title, body, markers, confidence, origin, author_account, created_at, updated_at, version, device_seq, origin_device, tombstone, attachment hashes. Signature = Ed25519(device_priv, SHA-256(canonical)).
+### Canonical signing encoding — FROZEN
+
+JSON with keys sorted, no insignificant whitespace, exactly these sixteen fields
+and no others: `attachments`, `author_account`, `body`, `confidence`, `created_at`,
+`device_seq`, `domain`, `entry_id`, `markers`, `origin`, `origin_device`, `space_id`,
+`title`, `tombstone`, `updated_at`, `version`. `markers` and `attachments` are `[]`
+when empty, never `null`. Signature = Ed25519(device_priv, SHA-256(canonical)).
+
+**This encoding may not change.** Not the field set, not the field names, not the
+order, not the null handling. It was already a within-store contract; since lore
+became an importable library it is a **cross-version** one, and that is a stronger
+obligation than it has ever carried:
+
+- One LORE_HOME is now shared by up to three independently-versioned builds — an
+  embedded library inside a consumer, the operator's `lore serve`, and the `lore`
+  CLI. They sign entries for each other.
+- The receive path verifies every incoming entry's signature (§Sync protocol). A
+  build that computes a different digest rejects **everything** the other build
+  wrote, in both directions.
+- The failure is silent. Nothing errors at the user; entries simply stop arriving
+  between two of the user's own devices, and the store on each looks healthy.
+
+Adding a field to a signed entry therefore requires an explicit, entry-carried
+signature version — a new column, a new verification branch, and a migration —
+never an edit to `canonicalEntry`. `TestCanonicalEncodingIsFrozen` in
+`internal/store` pins the exact bytes so that an edit fails the build rather than
+the fleet. If that test fails, the change is wrong; do not update the golden.
+
+The same rule and the same reasoning apply to the member-doc canonical encoding
+(`internal/space`), which authorizes writes.
+
+### Schema versioning
+
+`kv.schema_version` is the database's schema version; the build's is
+`store.schemaVersion`. `migrate` compares them three ways: lower migrates, equal
+returns, and **higher refuses with `ErrSchemaTooNew`** (`lore.ErrSchemaTooNew` at
+the public boundary). Refusing is the point: it used to return early for any
+`v >= schemaVersion`, so an older build opened a newer database and read columns
+that may have moved.
 
 LWW: an incoming entry version wins iff (updated_at, author_account) > local's, compared lexicographically (RFC3339 timestamps). Tombstones propagate identically.
 
@@ -185,9 +223,76 @@ Async bearer-token invites; the LAN handshake stays as the no-relay path (`lore 
 - **Routes**: `POST /v1/invites` (authed; {addr, blob b64, expires_in_s, max_uses}, clamped) · `GET /v1/invites/{addr}` (open, 10/min/IP — possessing addr implies possessing the secret; 404 when expired/exhausted) · `POST /v1/invites/{addr}/claims` (authed; uses counts claims) · `GET /v1/invites/claims` (authed; pending claims on own invites) · `POST /v1/invites/{addr}/processed` + `DELETE /v1/invites/{addr}` (authed, owner). Expired rows swept alongside challenge traffic.
 - **Flow**: `lore space invite <space>` (default when relay_url is set) mints the token, parks the encrypted `{space_id, space_key, kind/name/project_ref, role, owner keys}` payload, and records the secret locally (`lore space invites` lists/revokes). `lore join <token>` fetches+decrypts, stores the space, enrolls with the relay, parks its claim, and polls ~30s; if the owner's daemon is offline it exits pending and the daemons complete membership later. The owner's relay loop verifies claims, evolves the member doc (same admit path as the LAN invite), grants relay access, pushes a doc-only delta, and deletes used single-use invites.
 
+## Public Go API (package `lore`, module root)
+
+lore is an importable Go module under BSL 1.1. The root package is the **only**
+compatibility promise; everything under `internal/` changes without notice, and
+nothing there gains an exported accessor.
+
+**Shape: a facade, not a move.** The root package holds its own `Entry`, `Space`
+and `Member` structs and converts from `internal/store`'s. That costs a
+conversion layer and a second struct to keep in step; it buys the one thing
+discipline cannot: it is a compile error to publish `Space.SpaceKey` (a raw
+32-byte symmetric key), `Entry.Signature`, `AuthorDevice`, `DeviceSeq` or
+`OriginDevice`. Re-exporting the internal structs would have made every one of
+those a promise.
+
+**Surface** (19 methods, 4 package functions):
+
+```
+Open(Options) (*Store, error) · DefaultHome() · NormalizeMarkers([]string) · Terms(string)
+
+(*Store) Close/AccountID/DeviceID/Home
+entries  PutEntry · GetEntry · GetEntryIn · DeleteEntry · ListEntries · CountEntries · GetDomain · CopyEntry
+search   Search
+spaces   Spaces · GetSpace · SpaceByName · PersonalSpace · Members · CanWrite · Links
+```
+
+**Decisions worth their line:**
+
+- **`context.Context` first on every method that touches the DB.** It is checked
+  before the call and bounds the busy retry; it does not interrupt a statement
+  in flight. Taken even though the benefit today is small, because adding it
+  after v1 is breaking and removing it never is.
+- **`Options.Home`, never `LORE_HOME`.** The env read lives only in
+  `DefaultHome`, which the CLI calls and an embedder does not — one process can
+  then hold one store per member pod.
+- **`Options.NotifyOnWrite`** turns on the post-write side effects `lore mcp`
+  has always had: poke the daemon, re-render the mirror on a personal write.
+  Off by default and opt-in rather than automatic, because the failure mode of
+  forgetting it is silent — writes sit locally until the daemon's next poll.
+- **Search returns whole entries** with `Snippet` alongside. It always did; the
+  MCP text rendering was what discarded the body. Consumers must not model
+  search results as excerpts.
+- **Retry on `SQLITE_BUSY` lives in lore**, bounded by `busyRetries` and the
+  caller's context, and exhausts to `ErrBusy`. Contention is by design — `lore
+  serve`, `internal/syncproto`'s second connection and any CLI invocation share
+  `lore.db` — and busy_timeout does not cover a deferred transaction's
+  read→write upgrade.
+- **Absent on purpose**: space creation, init, enrolment, backup/restore,
+  invites, sync, membership mutation, key material, the schema, `*sql.DB`,
+  signing, capture routing and scope resolution (they read `os.Getwd`).
+- **Errors**: `ErrNotFound`, `ErrSpaceNotFound`, `ErrWrongSpace`, `ErrNotWriter`,
+  `ErrUserModel`, `ErrInvalidArgument`, `ErrReadOnly`, `ErrClosed`,
+  `ErrNoAccount`, `ErrSchemaTooNew`, `ErrBusy`. Every returned error matches one
+  of these or is the caller's own context error.
+- **Concurrency**: every method is safe from any number of goroutines — and that
+  is all that is promised. Not that reads run in parallel (they do not:
+  `SetMaxOpenConns(1)`). One `Store` per home per process.
+
+**`internal/mcpserver` is written against this package and nothing else.** That
+is the standing design test: if `lore mcp` cannot be built on the public
+surface, no other consumer can either, and the failure shows up in this repo
+where it is cheap. `cmd/lore` deliberately stays on `internal/` — `init`,
+`space create`, `join`, `enroll`, `backup` and `serve` all need keys, member
+docs and the daemon.
+
 ## MCP (internal/mcpserver)
 
-Direct-DB mode (WAL makes multi-process safe); after writes, poke the daemon's admin API (`POST 127.0.0.1:<port>/admin/sync?token=`) if daemon.json exists — fire-and-forget. Tools:
+Built on the public `lore` package (`lore.Open` with `NotifyOnWrite: true`), so
+after writes it pokes the daemon's admin API
+(`POST 127.0.0.1:<port>/admin/sync?token=`) if daemon.json exists — fire-and-forget
+— and re-renders the mirror on a personal-space write. Tools:
 
 | tool | params (JSON schema) |
 |---|---|
@@ -195,13 +300,15 @@ Direct-DB mode (WAL makes multi-process safe); after writes, poke the daemon's a
 | lore_get | id or domain (one req) → full entries |
 | lore_put | title, body, domain (req); space (default routed), markers, confidence (default provisional), origin (default evidence) |
 | lore_delete | id, space (both req) → signed tombstone; refuses when the entry is not in that space (ids are global); already-deleted = no-op, not an error; no confirm param (the space match is the guard) |
-| lore_spaces | none → spaces, roles, member counts, sync state |
+| lore_spaces | none → spaces with kind, entry count and member count (the real count once a space has a verified member list; 1 — this account — before it has one) |
 | lore_share | entry_id, to_space (req) → refuses profile/feedback; returns content preview + requires confirm=true param to execute |
 
 Server instructions ≤ 6 lines. No resources, no prompts, zero per-turn injection.
 
 ## Testing bar
 
-- Unit tests per package (store CRUD+FTS+LWW, keys roundtrip, canonical signing, distill roundtrip, space crypto wrap/unwrap, routing rules, blinding).
+- Unit tests per package (store CRUD+FTS+LWW, keys roundtrip, canonical signing, distill roundtrip, space crypto wrap/unwrap, routing rules, blinding), plus the public API against a real store in `t.TempDir()`.
+- **No test doubles for the store.** Tests use a real store in a temp dir, never a fake: this project has repeatedly been bitten by doubles that could not fail the way the real dependency fails. A new assertion is not done until it has been shown to fail with the code reverted.
+- Nothing may touch the real `~/.lore` or the real mirror directory. Every test points `LORE_HOME`/`Options.Home` at `t.TempDir()`.
 - Integration (in-repo, `go test ./test/...`): two LORE_HOMEs sync over localhost daemons (static peer, no mDNS dependency in CI); shared-space flow (invite→join→sync→isolation check); relay e2e (start relay on :0, two homes, login-from-scratch restore).
 - E2E harness test: register MCP in a scratch Claude Code config, `claude -p` with prompts exercising lore_search/lore_put, assert on DB rows. Windows host runs the binary natively; WSL used for a "second machine" daemon when useful.

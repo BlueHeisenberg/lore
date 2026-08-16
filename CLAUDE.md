@@ -1,21 +1,63 @@
 # lore — project instructions
 
-Read `README.md`, `docs/ARCHITECTURE.md`, and `docs/ROADMAP.md` before doing anything; they are the source of truth for scope and design. The project is in design phase — no Go code exists yet.
+Read `README.md`, `docs/IMPLEMENTATION.md` (the binding contract), `docs/ARCHITECTURE.md`
+and `docs/ROADMAP.md` before changing anything.
 
 ## Ground rules
 
-- **Git identity**: commit as `BlueHeisenberg <2033896+BlueHeisenberg@users.noreply.github.com>`. Never as BlueHeisenberg. `gh auth switch --user BlueHeisenberg` if needed.
-- **Sibling project**: agentmesh (`../harnessP2P`, github.com/BlueHeisenberg/agentmesh) is the communication layer; lore is the knowledge layer. lore must *import* agentmesh's discovery/transport packages (to be extracted to `pkg/` there — Phase 0), never copy them.
-- **Trust-model boundary**: agentmesh is ephemeral/anonymous; lore is persistent/identity-based. Do not blur this (e.g., no persistent identity features in agentmesh, no anonymous write paths in lore).
-- **Context discipline**: the lore MCP server injects nothing per turn. Knowledge reaches the agent only via explicit tool calls or the distill startup convention.
-- **distill compatibility**: the knowledge format is aura-distill's (SPINE.md + domain files + markers). Check aura-distill's license (github.com/tomacco/aura-distill) before importing code from it.
-- Go 1.25, same toolchain and release approach as agentmesh (GoReleaser + GitHub Actions on tag push) when code starts.
+- **Git identity**: commit as `BlueHeisenberg <2033896+BlueHeisenberg@users.noreply.github.com>`.
+  Never as the maintainer's work identity; `gh auth switch --user BlueHeisenberg` if needed.
+- **This repository is public.** Nothing goes in it that would not be shown to a stranger:
+  no third-party names, no LAN addresses, no personal or financial arrangements, no local
+  filesystem paths, no credentials of any kind. Session notes belong outside the repo.
+- **No `replace` directive in `go.mod`, ever.** A `replace` in a dependency's go.mod is
+  ignored by the consuming module, so a local-path replace here breaks every importer at
+  resolution time. agentmesh is pinned at a published tag.
+- **Sibling project**: agentmesh (github.com/BlueHeisenberg/agentmesh) is the communication
+  layer; lore is the knowledge layer. lore *imports* its `pkg/discovery`, `pkg/identity` and
+  `pkg/transport`, never copies them.
+- **Trust-model boundary**: agentmesh is ephemeral/anonymous; lore is persistent/identity-based.
+  Do not blur this (no persistent identity in agentmesh, no anonymous write paths in lore).
+- **Context discipline**: the lore MCP server injects nothing per turn. Knowledge reaches the
+  agent only via explicit tool calls or the mirror startup convention.
+- **distill compatibility**: the knowledge format is aura-distill's (SPINE.md + domain files +
+  markers). Check aura-distill's licence (github.com/tomacco/aura-distill) before importing
+  any code from it.
+- Go 1.25, same toolchain and release approach as agentmesh (GoReleaser + GitHub Actions on
+  tag push).
 
-## Current state (update this section as work progresses)
+## The public API is a promise; internal/ is not
 
-- **All phases 0–5 built and validated locally (2026-07-09).** Everything runs and is tested on this machine; only external accounts are pending (see SETUP-ACCOUNTS.md for the exact plug-in slots: Cloudflare domains/tunnel, home server, Stripe test keys, agentmesh push+tag to drop the go.mod replace).
-- Phase 0: agentmesh (D:\Projects\agentmesh, local commit) exposes pkg/discovery, pkg/transport, pkg/identity; lore imports them via go.mod replace.
-- Binaries: `cmd/lore` (CLI + daemon + MCP) and `cmd/lore-relay` (hosted-state relay). docs/IMPLEMENTATION.md is the binding contract.
-- Validated end-to-end: `claude -p` drives lore_search/lore_put through `lore mcp` (test/mcp/E2E-NOTES.md); two-daemon LAN sync + enrollment (test/sync); shared spaces with signed member docs, LAN invites, isolation (test/shared); relay signup/fresh-device login/tamper rejection/long-poll (test/relayclient); full relay-only two-account demo incl. grant reconciliation and no-plaintext-on-relay check (scratchpad e2e-grand.sh, all checks passed).
-- Safety rule (learned the hard way): nothing may default to the real `~/.claude/distill` (import-only); the mirror is opt-in via config.json mirror_dir. Tests always use scratch LORE_HOMEs.
-- Known v1 gaps: relay-based invites by handle (`lore invites` pending list) not built — invites are LAN/out-of-band; member removal = manual space_key rotation; member docs don't carry device certs (documented in syncproto/apply.go); GoReleaser/CI not set up.
+The root package (`package lore`) is lore's compatibility surface. Everything under
+`internal/` — sync, signing, membership, the relay, the schema, the canonical encodings —
+changes without notice and gains no exported accessor. Two rules follow:
+
+- **`internal/mcpserver` is written against the public package only.** That is the standing
+  design test: if `lore mcp` cannot be built on the public surface, no other consumer can
+  either. Do not "temporarily" reach into `internal/store` from it.
+- **The canonical signing encoding is frozen.** One LORE_HOME is shared by up to three
+  differently-versioned builds that verify each other's signatures; a changed digest stops
+  sync silently. `TestCanonicalEncodingIsFrozen` guards it — if it goes red the change is
+  wrong, not the golden.
+
+## Testing
+
+Real stores in `t.TempDir()`, never a fake — this project has been bitten repeatedly by
+doubles that could not fail the way SQLite fails. A new assertion is not done until it has
+been shown to fail with the code reverted. Nothing may touch the real `~/.lore` or the real
+mirror directory.
+
+Full gate, all with `GOWORK=off`: `gofmt -l .`, `go vet ./...`, `go build ./...`,
+`go test -count=1 ./...`.
+
+## Current state
+
+- Phases 0–5 built and validated: local core, MCP, daemon/sync/enroll/vault, shared spaces
+  with signed member docs, LAN and relay invites, relay server with billing hooks.
+- Public Go API at the module root; `internal/mcpserver` rewritten onto it; `cmd/lore` stays
+  on `internal/` (init, space create, join, enroll, backup and serve need keys and the daemon).
+- BSL 1.1, public repository, importable module. External accounts still pending — see
+  SETUP-ACCOUNTS.md.
+- Known gaps: relay-based invites by handle not built (invites are LAN/token); member removal
+  is manual space_key rotation; member docs carry no device certs (documented in
+  syncproto/apply.go); GoReleaser/CI not set up.

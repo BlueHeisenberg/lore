@@ -394,3 +394,50 @@ func TestEnforcementRules(t *testing.T) {
 		t.Fatal("second personal space allowed")
 	}
 }
+
+// TestCanonicalEncodingIsFrozen pins the exact signing bytes.
+//
+// The canonical encoding is a CROSS-VERSION contract: an embedded lore
+// library, `lore serve` and the `lore` CLI may be three different builds on
+// one LORE_HOME, and each verifies the others' entry signatures on receive. A
+// build that computes a different digest rejects everything the other wrote,
+// in both directions, silently — entries just stop arriving between a user's
+// own devices and both stores look healthy.
+//
+// So this golden is not a change-detector to be updated when it goes red. If
+// it fails, the change is wrong: a new signed field needs an explicit,
+// entry-carried signature version, not an edit to canonicalEntry. See
+// docs/IMPLEMENTATION.md §"Canonical signing encoding — FROZEN".
+func TestCanonicalEncodingIsFrozen(t *testing.T) {
+	e := Entry{
+		EntryID: "E", SpaceID: "S", Domain: "ops/deploy", Title: "T", Body: "B",
+		Markers: []string{"[IMPORTANT]"}, Confidence: "validated", Origin: "constraint",
+		AuthorAccount: "A", AuthorDevice: "D-not-signed",
+		CreatedAt: "2026-01-01T00:00:00.000000000Z",
+		UpdatedAt: "2026-01-02T00:00:00.000000000Z",
+		Version:   3, DeviceSeq: 7, OriginDevice: "OD", Signature: "sig-not-signed",
+		Provenance: &Provenance{SourceEntry: "X"}, Tombstone: true,
+	}
+	const want = `{"attachments":[],"author_account":"A","body":"B","confidence":"validated",` +
+		`"created_at":"2026-01-01T00:00:00.000000000Z","device_seq":7,"domain":"ops/deploy",` +
+		`"entry_id":"E","markers":["[IMPORTANT]"],"origin":"constraint","origin_device":"OD",` +
+		`"space_id":"S","title":"T","tombstone":true,` +
+		`"updated_at":"2026-01-02T00:00:00.000000000Z","version":3}`
+	got, err := CanonicalBytes(e, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("canonical encoding changed — see the doc comment above.\n got: %s\nwant: %s", got, want)
+	}
+
+	// Empty markers encode as [], never null: a nil-vs-empty slip changes the
+	// digest for every entry that has no markers.
+	got, err = CanonicalBytes(Entry{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"markers":[]`) || !strings.Contains(string(got), `"attachments":[]`) {
+		t.Fatalf("empty markers/attachments must encode as []: %s", got)
+	}
+}
