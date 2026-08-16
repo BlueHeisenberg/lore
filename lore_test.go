@@ -97,6 +97,174 @@ func spaceID(t *testing.T, s *Store, name string) string {
 }
 
 // ----------------------------------------------------------------------------
+// Init
+// ----------------------------------------------------------------------------
+
+func TestInit(t *testing.T) {
+	home := t.TempDir()
+	id, err := Init(home, "pod-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.AccountID == "" || id.DeviceID == "" || id.PersonalSpaceID == "" {
+		t.Fatalf("empty ids in %+v", id)
+	}
+	if id.DeviceName != "pod-a" {
+		t.Errorf("DeviceName = %q, want pod-a", id.DeviceName)
+	}
+	// 10 groups of 4 Crockford chars: the code is a KDF factor for signup and
+	// backup, so its shape is part of what Init promises.
+	if groups := strings.Split(id.RecoveryCode, "-"); len(groups) != 10 {
+		t.Errorf("recovery code %q: %d groups, want 10", id.RecoveryCode, len(groups))
+	} else {
+		for _, g := range groups {
+			if len(g) != 4 {
+				t.Errorf("recovery code %q: group %q is not 4 chars", id.RecoveryCode, g)
+			}
+		}
+	}
+	for _, f := range []string{"account.json", "device.json", "lore.db", "config.json", "blobs"} {
+		if _, err := os.Stat(filepath.Join(home, f)); err != nil {
+			t.Errorf("after Init: %v", err)
+		}
+	}
+
+	// The home Init made is one Open accepts, and the ids agree.
+	s := open(t, home)
+	if s.AccountID() != id.AccountID || s.DeviceID() != id.DeviceID {
+		t.Errorf("Open: account/device %s/%s, want %s/%s",
+			s.AccountID(), s.DeviceID(), id.AccountID, id.DeviceID)
+	}
+	sp, err := s.PersonalSpace(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp.ID != id.PersonalSpaceID {
+		t.Errorf("PersonalSpace = %s, want %s", sp.ID, id.PersonalSpaceID)
+	}
+	if _, err := s.PutEntry(bg, PutParams{SpaceID: sp.ID, Domain: "ops", Title: "t", Body: "b"}); err != nil {
+		t.Errorf("write to a home Init made: %v", err)
+	}
+}
+
+func TestInitDefaultsDeviceNameToHostname(t *testing.T) {
+	id, err := Init(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := os.Hostname()
+	if want == "" {
+		want = "device"
+	}
+	if id.DeviceName != want {
+		t.Errorf("DeviceName = %q, want %q", id.DeviceName, want)
+	}
+}
+
+// TestInitRefusesNonEmptyHome covers the weak-check fault: a home can hold a
+// lore.db without holding an account.json (a restore that got half done, keys
+// deleted by hand, a pod that lost its identity volume but kept its data
+// one). Accepting it would mint a fresh account that adopts entries signed by
+// keys it does not have, and the run that did it looks like a first boot.
+func TestInitRefusesNonEmptyHome(t *testing.T) {
+	t.Run("already initialised", func(t *testing.T) {
+		home := t.TempDir()
+		if _, err := Init(home, "one"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Init(home, "two"); !errors.Is(err, ErrAlreadyInitialised) {
+			t.Errorf("second Init: want ErrAlreadyInitialised, got %v", err)
+		}
+	})
+	// The case the weaker check gets wrong, in full: a real database whose
+	// keys are gone. Init must refuse it — and must not touch it. Its
+	// all-or-nothing cleanup is only safe because "empty" includes the
+	// database: a check that let this through would delete the store it just
+	// failed to adopt.
+	t.Run("database without keys", func(t *testing.T) {
+		home := t.TempDir()
+		if _, err := Init(home, "first"); err != nil {
+			t.Fatal(err)
+		}
+		s := open(t, home)
+		personal, err := s.PersonalSpace(bg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.PutEntry(bg, PutParams{SpaceID: personal.ID, Domain: "ops", Title: "keep me"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{"account.json", "device.json"} {
+			if err := os.Remove(filepath.Join(home, f)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := Init(home, "second"); !errors.Is(err, ErrAlreadyInitialised) {
+			t.Fatalf("Init over an existing database: want ErrAlreadyInitialised, got %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(home, "lore.db")); err != nil {
+			t.Fatalf("the refused Init destroyed the database: %v", err)
+		}
+	})
+	for _, f := range []string{"account.json", "device.json", "lore.db"} {
+		t.Run("only "+f, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, f), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Init(home, "")
+			if !errors.Is(err, ErrAlreadyInitialised) {
+				t.Fatalf("Init on a home holding %s: want ErrAlreadyInitialised, got %v", f, err)
+			}
+			// Nothing written: the refusal is not a partial init.
+			for _, other := range []string{"account.json", "device.json", "lore.db"} {
+				if other == f {
+					continue
+				}
+				if _, err := os.Stat(filepath.Join(home, other)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("refused Init created %s", other)
+				}
+			}
+		})
+	}
+}
+
+// TestInitCleansUpAfterFailure pins the all-or-nothing promise. A plain file
+// where the blobs directory goes fails Init half way — after the keys are
+// written — and the home must come back exactly as it was, because a home
+// holding account.json and nothing else is one Init would refuse forever.
+func TestInitCleansUpAfterFailure(t *testing.T) {
+	home := t.TempDir()
+	blocker := filepath.Join(home, "blobs")
+	if err := os.WriteFile(blocker, []byte("in the way"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Init(home, "doomed"); err == nil {
+		t.Fatal("Init: want an error, got nil")
+	}
+	for _, f := range []string{"account.json", "device.json", "lore.db"} {
+		if _, err := os.Stat(filepath.Join(home, f)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a failed Init left %s behind", f)
+		}
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Init(home, "retry"); err != nil {
+		t.Errorf("retry after a failed Init: %v", err)
+	}
+}
+
+func TestInitRequiresHome(t *testing.T) {
+	if _, err := Init("", ""); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("empty home: want ErrInvalidArgument, got %v", err)
+	}
+}
+
+// ----------------------------------------------------------------------------
 // Open
 // ----------------------------------------------------------------------------
 
@@ -167,6 +335,10 @@ func TestClosedAndCancelled(t *testing.T) {
 	if _, err := s.ListEntries(cancelled, sp); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled ctx: want context.Canceled, got %v", err)
 	}
+	// CreateSpace does not go through do(), so it carries its own guards.
+	if _, err := s.CreateSpace(cancelled, "cancelled", Shared); !errors.Is(err, context.Canceled) {
+		t.Errorf("CreateSpace on a cancelled ctx: want context.Canceled, got %v", err)
+	}
 
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -179,6 +351,9 @@ func TestClosedAndCancelled(t *testing.T) {
 	}
 	if _, err := s.PutEntry(bg, PutParams{SpaceID: sp, Domain: "d/x", Title: "t"}); !errors.Is(err, ErrClosed) {
 		t.Errorf("write after Close: want ErrClosed, got %v", err)
+	}
+	if _, err := s.CreateSpace(bg, "after-close", Shared); !errors.Is(err, ErrClosed) {
+		t.Errorf("CreateSpace after Close: want ErrClosed, got %v", err)
 	}
 }
 
@@ -518,6 +693,86 @@ func TestTimestampSameTickPadding(t *testing.T) {
 // Spaces and membership
 // ----------------------------------------------------------------------------
 
+// TestCreateSpace is the whole point of exporting it: the id comes back, and
+// the space is finished — member-list v1 exists and names this account owner.
+// A space row alone would pass "it was created" and still be one nobody can
+// prove they own or invite anyone into.
+func TestCreateSpace(t *testing.T) {
+	home := t.TempDir()
+	id, err := Init(home, "loretest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := open(t, home)
+
+	sp, err := s.CreateSpace(bg, "household", Shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp.ID == "" {
+		t.Fatal("CreateSpace returned no id — the whole reason it exists")
+	}
+	if sp.Name != "household" || sp.Kind != Shared {
+		t.Errorf("got %+v, want name household kind shared", sp)
+	}
+	if got, err := s.GetSpace(bg, sp.ID); err != nil || got.ID != sp.ID {
+		t.Errorf("GetSpace(%s) = %+v, %v", sp.ID, got, err)
+	}
+
+	members, err := s.Members(bg, sp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0].AccountID != id.AccountID || members[0].Role != Owner {
+		t.Fatalf("members = %+v, want one owner %s", members, id.AccountID)
+	}
+	if ok, err := s.CanWrite(bg, sp.ID); err != nil || !ok {
+		t.Errorf("CanWrite = %v, %v; the creator must be able to write", ok, err)
+	}
+	if _, err := s.PutEntry(bg, PutParams{SpaceID: sp.ID, Domain: "ops", Title: "t", Body: "b"}); err != nil {
+		t.Errorf("write to the new space: %v", err)
+	}
+}
+
+func TestCreateSpaceRefusals(t *testing.T) {
+	home := t.TempDir()
+	if _, err := Init(home, "loretest"); err != nil {
+		t.Fatal(err)
+	}
+	s := open(t, home)
+	if _, err := s.CreateSpace(bg, "household", Shared); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		what string
+		name string
+		kind SpaceKind
+		want error
+	}{
+		{"duplicate name", "household", Shared, ErrSpaceExists},
+		{"reserved name", "personal", Shared, ErrInvalidArgument},
+		{"personal kind", "second-personal", Personal, ErrInvalidArgument},
+		{"no name", "", Shared, ErrInvalidArgument},
+	} {
+		if _, err := s.CreateSpace(bg, tc.name, tc.kind); !errors.Is(err, tc.want) {
+			t.Errorf("%s: want %v, got %v", tc.what, tc.want, err)
+		}
+	}
+	// A refused create leaves nothing behind: still one personal + one shared.
+	sps, err := s.Spaces(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sps) != 2 {
+		t.Errorf("after four refusals: %d spaces, want 2", len(sps))
+	}
+
+	ro := open(t, home, func(o *Options) { o.ReadOnly = true })
+	if _, err := ro.CreateSpace(bg, "other", Shared); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("read-only store: want ErrReadOnly, got %v", err)
+	}
+}
+
 func TestSpaces(t *testing.T) {
 	home := newHome(t, "team")
 	s := open(t, home)
@@ -821,5 +1076,26 @@ func TestConcurrentUse(t *testing.T) {
 	}
 	if got, _ := s.CountEntries(bg, personal); got != n {
 		t.Errorf("wrote %d entries concurrently, store holds %d", n, got)
+	}
+}
+
+// TestInitKeepsAPreSeededConfig: config.json is not part of the emptiness
+// check, so a home can arrive with one already mounted. Init must not
+// overwrite the mirror_dir a deployment put there.
+func TestInitKeepsAPreSeededConfig(t *testing.T) {
+	home := t.TempDir()
+	want := `{"mirror_dir": "/srv/mirror"}`
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(want), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Init(home, "seeded"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("config.json = %q, want %q", got, want)
 	}
 }

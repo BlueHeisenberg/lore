@@ -56,6 +56,18 @@ var (
 	// `lore init`. Open-time only.
 	ErrNoAccount = errors.New("lore: home is not initialised")
 
+	// ErrAlreadyInitialised: Init was given a home that already holds an
+	// account.json, a device.json or a lore.db. Nothing was written. The
+	// database counts: a new account adopting an old database is a data
+	// fault, not a fresh start. Init-time only.
+	ErrAlreadyInitialised = errors.New("lore: home is already initialised")
+
+	// ErrSpaceExists: CreateSpace was given a name a space in this store
+	// already has. Nothing was created. It is a state conflict rather than a
+	// programming error — a space that arrived by sync can take a name — so
+	// it is worth branching on: ask the human for another name.
+	ErrSpaceExists = errors.New("lore: a space with that name already exists")
+
 	// ErrSchemaTooNew: the database was written by a newer lore than this
 	// build. Open-time only, and it refuses rather than proceeding: an older
 	// build silently reading a newer schema's columns corrupts. See the

@@ -2,7 +2,10 @@ package lore
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	"github.com/BlueHeisenberg/lore/internal/keys"
 	"github.com/BlueHeisenberg/lore/internal/space"
 	"github.com/BlueHeisenberg/lore/internal/store"
 )
@@ -86,6 +89,65 @@ func (s *Store) Spaces(ctx context.Context) ([]Space, error) {
 		out[i] = spaceOf(sp)
 	}
 	return out, nil
+}
+
+// CreateSpace creates a shared space owned by this store's account and
+// returns it, id included — so nothing ever has to diff a listing to find out
+// what was made.
+//
+// It does the whole creation, not the row: a fresh space key, the space, and
+// signed member-list v1 naming this account sole owner with its wrapped copy
+// of the key inside. Those are one transaction. A space without that document
+// is one nobody can prove they own and nobody can be invited into.
+//
+// kind must be Shared. The personal space is Init's: there is exactly one per
+// home, it never accepts members, and asking for another here is
+// ErrInvalidArgument rather than a second one. So is the name "personal",
+// which resolves to the personal space everywhere lore takes a name.
+//
+// A name already held by a space in this store is ErrSpaceExists. That is a
+// local guard and not a uniqueness promise — see Space.Name — but it is the
+// one that stops a wizard from making a member's space twice.
+//
+// ErrBusy is not retried here, unlike every other write in this package: this
+// is two statements, and a replay is only safe for an operation that
+// committed nothing. Call it again yourself if you want to.
+//
+// A read-only store loads no signing identity and so cannot own anything:
+// ErrReadOnly.
+func (s *Store) CreateSpace(ctx context.Context, name string, kind SpaceKind) (Space, error) {
+	switch {
+	case name == "":
+		return Space{}, invalid("name is required")
+	case name == "personal":
+		return Space{}, invalid(`the name "personal" is reserved for the personal space`)
+	case kind != Shared:
+		return Space{}, invalid("kind must be %q; the personal space is created by Init", Shared)
+	}
+	// The name lookup is also this call's closed-store and context check: it
+	// runs before anything is written and reports both.
+	switch _, err := s.SpaceByName(ctx, name); {
+	case err == nil:
+		return Space{}, fmt.Errorf("%w: %q", ErrSpaceExists, name)
+	case !errors.Is(err, ErrSpaceNotFound):
+		return Space{}, err
+	}
+	// The account signing key is loaded here and held nowhere: it certifies
+	// devices, so a long-lived Store keeping it in memory would be a worse
+	// trade than one file read on a rare call.
+	account, err := keys.LoadAccount(s.home)
+	if err != nil {
+		return Space{}, err
+	}
+	priv, err := account.SigningKey()
+	if err != nil {
+		return Space{}, err
+	}
+	sp, err := s.st.CreateSharedSpace(name, "", account.EncPub, priv)
+	if err != nil {
+		return Space{}, wrap(err)
+	}
+	return spaceOf(sp), nil
 }
 
 // GetSpace returns a space by id, or ErrSpaceNotFound.

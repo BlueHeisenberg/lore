@@ -222,6 +222,71 @@ func (s *Store) CreateSpace(kind, name, projectRef string, key []byte) (Space, e
 	return sp, nil
 }
 
+// CreateSharedSpace creates a shared space end to end: a fresh space_key, the
+// space row, and signed member-list v1 naming this store's signing account as
+// sole owner, with its wrapped copy of the space_key inside.
+//
+// The two rows go in one transaction. A space row without member-list v1 is a
+// space nobody can prove they own — it cannot be invited into (Evolve needs a
+// previous doc) and everyone who holds it may write to it — so a half-applied
+// creation is worse than no creation at all.
+//
+// accountEncPub and accountPriv are the account's X25519 encryption pubkey and
+// its Ed25519 signing key. The owner is the signer's account, so a store can
+// only create a space it owns; without a signer this is ErrNoSigner.
+func (s *Store) CreateSharedSpace(name, projectRef, accountEncPub string, accountPriv ed25519.PrivateKey) (Space, error) {
+	if s.signer == nil {
+		return Space{}, ErrNoSigner
+	}
+	key, err := space.NewSpaceKey()
+	if err != nil {
+		return Space{}, err
+	}
+	wrapped, err := space.WrapSpaceKey(key, accountEncPub)
+	if err != nil {
+		return Space{}, err
+	}
+	sp := Space{
+		SpaceID:    uuid.NewString(),
+		Kind:       "shared",
+		Name:       name,
+		ProjectRef: projectRef,
+		SpaceKey:   key,
+		CreatedAt:  nowTS(),
+	}
+	doc, err := space.NewMemberDoc(sp.SpaceID, space.Member{
+		AccountPub:      s.signer.AccountID,
+		EncPub:          accountEncPub,
+		Role:            space.RoleOwner,
+		WrappedSpaceKey: wrapped,
+	}, accountPriv)
+	if err != nil {
+		return Space{}, err
+	}
+	docJSON, err := doc.DocJSON()
+	if err != nil {
+		return Space{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Space{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO spaces(space_id,kind,name,project_ref,space_key,pinned,created_at)
+		VALUES(?,?,?,?,?,0,?)`,
+		sp.SpaceID, sp.Kind, sp.Name, sp.ProjectRef, sp.SpaceKey, sp.CreatedAt); err != nil {
+		return Space{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO member_docs(space_id,version,doc,sig,signer) VALUES(?,1,?,?,?)`,
+		sp.SpaceID, docJSON, doc.Sig, doc.SignedBy); err != nil {
+		return Space{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Space{}, err
+	}
+	return sp, nil
+}
+
 func scanSpaces(rows *sql.Rows) ([]Space, error) {
 	defer rows.Close()
 	var out []Space

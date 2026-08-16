@@ -18,7 +18,7 @@ Design document. Everything here is pre-implementation and revisable.
 
 ## Onboarding — there is no signup
 
-- **`lore init`** (free, local): generates the account keypair + this device's key, creates the `personal` space, prints the recovery code once. No email, no username, no server. The account IS the keypair. The recovery code MUST be confirmed by re-typing it before init completes (converts "yeah, next" into actually-saved); the CLI suggests a password manager and offers the recovery kit as a downloadable file.
+- **`lore init`** (free, local): generates the account keypair + this device's key, creates the `personal` space, prints the recovery code once. No email, no username, no server. The account IS the keypair. The recovery code MUST be confirmed by re-typing it (converts "yeah, next" into actually-saved); the CLI suggests a password manager and offers the recovery kit as a downloadable file. The prompt comes immediately after the account exists rather than before — `lore.Init` mints the code as part of creating the account, and the code protects nothing until a signup or a backup wraps something under it, so a mistyped confirmation costs a `lore recovery new` and not the account.
 - **Second device (free)**: `lore enroll` on the new device shows a short code/QR; `lore approve <code>` on an existing device signs the new device key and hands over wrapped space keys.
 - **`lore signup`** (relay tier): pick a public handle (`@alice`), set a passphrase; client uploads the public key, handle→pubkey mapping, and the keybox. Email exists only inside Stripe for billing — the relay's crypto layer never sees it.
 

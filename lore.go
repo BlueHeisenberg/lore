@@ -13,9 +13,21 @@
 // to mutate a member list — each of those would freeze an internal format
 // into a public contract.
 //
-// Space creation, device enrolment, backup and restore are also deliberately
-// absent. Spaces are made out of band by a person who chose a name and a
-// sharing posture; an embedder joins spaces that already exist.
+// Init and CreateSpace are here; device enrolment, invites and join,
+// backup and restore, sync and membership mutation are not, and an embedder
+// still reaches those by running the CLI.
+//
+// This package used to say space creation was deliberately absent, on the
+// argument that a space is made out of band by a person who chose a name and
+// a sharing posture. The premise that changed is who that person is: an
+// embedder creating a household member's own space in a wizard IS that person
+// deciding, and forcing it to shell out to `lore space create` bought no
+// deliberation — it bought a subprocess and a caller parsing prose to learn
+// the new space's id. So creation moved in, and the argument survives in the
+// signature rather than in the absence: CreateSpace takes a name and a kind
+// and refuses to guess either, there is no get-or-create that lets a space
+// appear because a lookup missed, and the personal space belongs to Init
+// because there is exactly one.
 //
 // # Stability
 //
@@ -66,8 +78,12 @@ import (
 
 	"github.com/BlueHeisenberg/lore/internal/distill"
 	"github.com/BlueHeisenberg/lore/internal/keys"
+	"github.com/BlueHeisenberg/lore/internal/space"
 	"github.com/BlueHeisenberg/lore/internal/store"
 )
+
+// dbFile is the database's name inside a lore home.
+const dbFile = "lore.db"
 
 // Options configure a store. Home is the only required field.
 type Options struct {
@@ -154,7 +170,7 @@ func Open(opts Options) (*Store, error) {
 		signer = &store.Signer{AccountID: s.accountID, DeviceID: s.deviceID, DevicePriv: priv}
 	}
 
-	st, err := store.Open(filepath.Join(opts.Home, "lore.db"), signer)
+	st, err := store.Open(filepath.Join(opts.Home, dbFile), signer)
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -183,6 +199,129 @@ func loadIdentity(home string) (*keys.Account, *keys.Device, error) {
 		return nil, nil, err
 	}
 	return account, device, nil
+}
+
+// Identity is what Init created.
+type Identity struct {
+	AccountID       string // hex Ed25519 account signing key: this home's identity
+	DeviceID        string // hex Ed25519 device key that signs this home's writes
+	DeviceName      string // the name given, or the hostname when none was
+	PersonalSpaceID string // the one personal space, created with the home
+
+	// RecoveryCode is the account recovery code, in the clear, and this is
+	// the only time lore will ever produce it: it is a KDF factor and is
+	// stored nowhere.
+	//
+	// Ignore it if you do not want it. It protects nothing at this point —
+	// nothing has been wrapped under it yet — so discarding it costs only a
+	// later `lore recovery new` before relay signup or a backup, which mints
+	// another and voids nothing. Show it to a human or drop it on the floor;
+	// the one thing not to do is log it, because a home that HAS signed up
+	// pairs this code with a passphrase to unwrap the account keys.
+	RecoveryCode string
+}
+
+// Init creates a lore home at home: an account keypair, a device keypair
+// certified by it, the database, and the personal space. deviceName defaults
+// to the hostname, or "device" when even that is unavailable.
+//
+// It does not open the store — Open does, and only the caller knows whether
+// it wants Options.NotifyOnWrite. Like Open it takes no context: it is
+// construction, and its writes are a handful of local file and SQLite calls.
+//
+// The home must be empty of lore: no account.json, no device.json AND no
+// lore.db. Any of the three is ErrAlreadyInitialised and nothing is written.
+// The database counts because the weaker check is a silent data fault — a
+// fresh account adopting an existing lore.db inherits entries signed by keys
+// it does not have and a personal space it did not create, and the run that
+// did it looks like a successful first boot.
+//
+// Init is all-or-nothing: every file it creates is one this call created, in
+// a home it verified was empty, so any failure removes them again and leaves
+// the home as it found it. That is what makes retrying safe.
+func Init(home, deviceName string) (id Identity, err error) {
+	if home == "" {
+		return Identity{}, invalid("home is required")
+	}
+	for _, f := range []string{keys.AccountFile, keys.DeviceFile, dbFile} {
+		switch _, serr := os.Stat(filepath.Join(home, f)); {
+		case serr == nil:
+			return Identity{}, fmt.Errorf("%w: %s already holds %s", ErrAlreadyInitialised, home, f)
+		case !errors.Is(serr, os.ErrNotExist):
+			return Identity{}, serr
+		}
+	}
+	if deviceName == "" {
+		if h, herr := os.Hostname(); herr == nil && h != "" {
+			deviceName = h
+		} else {
+			deviceName = "device"
+		}
+	}
+	account, err := keys.GenerateAccount()
+	if err != nil {
+		return Identity{}, err
+	}
+	device, err := keys.GenerateDevice(deviceName, account)
+	if err != nil {
+		return Identity{}, err
+	}
+	code, err := keys.NewRecoveryCode()
+	if err != nil {
+		return Identity{}, err
+	}
+	defer func() {
+		if err != nil {
+			for _, f := range []string{keys.AccountFile, keys.DeviceFile, dbFile, dbFile + "-wal", dbFile + "-shm"} {
+				os.Remove(filepath.Join(home, f))
+			}
+		}
+	}()
+	if err = keys.SaveAccount(home, account); err != nil {
+		return Identity{}, err
+	}
+	if err = keys.SaveDevice(home, device); err != nil {
+		return Identity{}, err
+	}
+	if err = os.MkdirAll(filepath.Join(home, "blobs"), 0o700); err != nil {
+		return Identity{}, err
+	}
+	// An empty config.json so mirror_dir is discoverable — and never a
+	// default value: nothing in lore may point at a directory it does not
+	// own. config.json is not part of the emptiness check (it carries no
+	// identity and no data), so a pre-seeded one is left exactly as it is.
+	cfg := filepath.Join(home, "config.json")
+	if _, serr := os.Stat(cfg); errors.Is(serr, os.ErrNotExist) {
+		if err = os.WriteFile(cfg, []byte("{\n  \"mirror_dir\": \"\"\n}\n"), 0o600); err != nil {
+			return Identity{}, err
+		}
+	}
+	priv, err := device.PrivateKey()
+	if err != nil {
+		return Identity{}, err
+	}
+	st, err := store.Open(filepath.Join(home, dbFile), &store.Signer{
+		AccountID: account.AccountID(), DeviceID: device.DeviceID(), DevicePriv: priv,
+	})
+	if err != nil {
+		return Identity{}, wrap(err)
+	}
+	defer st.Close()
+	key, err := space.NewSpaceKey()
+	if err != nil {
+		return Identity{}, err
+	}
+	sp, err := st.CreateSpace("personal", "personal", "", key)
+	if err != nil {
+		return Identity{}, wrap(err)
+	}
+	return Identity{
+		AccountID:       account.AccountID(),
+		DeviceID:        device.DeviceID(),
+		DeviceName:      deviceName,
+		PersonalSpaceID: sp.SpaceID,
+		RecoveryCode:    code,
+	}, nil
 }
 
 // Close releases the database. Calls already in flight are not cancelled;

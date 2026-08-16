@@ -155,12 +155,12 @@ LWW: an incoming entry version wins iff (updated_at, author_account) > local's, 
 ## CLI surface (cmd/lore)
 
 ```
-lore init [--name]                 create account+device+personal space, print recovery code (forced re-type; --yes-i-saved-it for tests)
+lore init [--name]                 create account+device+personal space (lore.Init), print recovery code (re-type to confirm AFTER creation; --yes-i-saved-it for tests)
 lore put --domain d --title t [--space s] [--markers ..] [--confidence ..] [--origin ..] [-|--body-file]
 lore get <entry-id|domain>         print entry/domain
 lore search <query> [--space|--scope|--domain|--marker|--confidence]
 lore spaces                        list spaces + members + sync state
-lore space create <name>           topic space
+lore space create <name>           topic space (lore.CreateSpace)
 lore space invite <space> [@handle]  invite (LAN code v1; handle = relay)
 lore join <code>                   accept LAN invite
 lore invites                       list/accept pending relay invites
@@ -268,15 +268,16 @@ discipline cannot: it is a compile error to publish `Space.SpaceKey` (a raw
 `OriginDevice`. Re-exporting the internal structs would have made every one of
 those a promise.
 
-**Surface** (19 methods, 4 package functions):
+**Surface** (21 methods, 5 package functions):
 
 ```
-Open(Options) (*Store, error) · DefaultHome() · NormalizeMarkers([]string) · Terms(string)
+Open(Options) (*Store, error) · Init(home, deviceName string) (Identity, error)
+DefaultHome() · NormalizeMarkers([]string) · Terms(string)
 
 (*Store) Close/AccountID/DeviceID/Home
 entries  PutEntry · GetEntry · GetEntryIn · DeleteEntry · ListEntries · CountEntries · GetDomain · CopyEntry
 search   Search
-spaces   Spaces · GetSpace · SpaceByName · PersonalSpace · Members · CanWrite · Links
+spaces   CreateSpace · Spaces · GetSpace · SpaceByName · PersonalSpace · Members · CanWrite · Links
 ```
 
 **Decisions worth their line:**
@@ -300,23 +301,67 @@ spaces   Spaces · GetSpace · SpaceByName · PersonalSpace · Members · CanWri
   serve`, `internal/syncproto`'s second connection and any CLI invocation share
   `lore.db` — and busy_timeout does not cover a deferred transaction's
   read→write upgrade.
-- **Absent on purpose**: space creation, init, enrolment, backup/restore,
-  invites, sync, membership mutation, key material, the schema, `*sql.DB`,
-  signing, capture routing and scope resolution (they read `os.Getwd`).
+- **`Init` creates a home; it does not open one.** Only the caller knows whether
+  it wants `NotifyOnWrite`, so `Open` stays a separate call and `Init` returns no
+  `*Store` — and therefore no question of who closes it on the error path. Like
+  `Open` it takes no context: it is construction.
+- **`Init` requires an empty home — no `account.json`, no `device.json` AND no
+  `lore.db`** — and is `ErrAlreadyInitialised` otherwise. The database counts.
+  The weaker check (keys only) lets a fresh account adopt an existing database:
+  it inherits entries signed by keys it does not have and a personal space it
+  did not create, and the run looks like a successful first boot. The two rules
+  are load-bearing on each other — `Init` is all-or-nothing and removes what it
+  wrote on any failure, which is only safe because every one of those files is
+  one it created in a home it verified was empty.
+- **`Identity.RecoveryCode` is returned, not required.** The code is a KDF factor
+  for relay signup and backup, stored nowhere, so `Init` is the only place it
+  can ever be produced — but at that moment it protects nothing, and discarding
+  it costs a later `lore recovery new`. A consumer that does not want a secret
+  (a member pod) ignores the field; one that does (the CLI) shows it. What
+  changed: the CLI's re-type confirmation now happens after the home exists, so
+  a mistyped confirmation costs a `lore recovery new` rather than the account.
+- **`CreateSpace` returns the space, id included, and does the whole creation** —
+  key, space row and signed member-list v1 naming the caller sole owner, in one
+  transaction (`store.CreateSharedSpace`). A space row without v1 is one nobody
+  can prove they own and nobody can be invited into; a caller that has to diff
+  `lore spaces` to learn the new id is the failure this export exists to end.
+  It is the one write not retried on `SQLITE_BUSY`: it is two statements, and
+  replay is only safe for an operation that committed nothing.
+- **The space argument survives in the signature, not in the absence.** This
+  package used to refuse space creation on the grounds that a space is a
+  person's decision — a name and a sharing posture chosen out of band. An
+  embedder creating a member's own space in a wizard is that person; what
+  shelling out bought was a subprocess and prose parsing, not deliberation. So
+  `CreateSpace` takes a name and a kind and guesses neither, there is no
+  get-or-create, a duplicate name is `ErrSpaceExists` rather than a silent
+  second space, and the personal space belongs to `Init` because there is one.
+- **Absent on purpose**: device enrolment, invites and join, backup/restore,
+  sync, membership mutation (`Evolve`), pinning, `project_ref` (resolving one
+  reads `os.Getwd` and a git config), key material, the schema, `*sql.DB`,
+  signing, capture routing and scope resolution.
 - **Errors**: `ErrNotFound`, `ErrSpaceNotFound`, `ErrWrongSpace`, `ErrNotWriter`,
   `ErrUserModel`, `ErrInvalidArgument`, `ErrReadOnly`, `ErrClosed`,
-  `ErrNoAccount`, `ErrSchemaTooNew`, `ErrBusy`. Every returned error matches one
-  of these or is the caller's own context error.
+  `ErrNoAccount`, `ErrAlreadyInitialised`, `ErrSpaceExists`, `ErrSchemaTooNew`,
+  `ErrBusy`. Every returned error matches one of these or is the caller's own
+  context error.
 - **Concurrency**: every method is safe from any number of goroutines — and that
   is all that is promised. Not that reads run in parallel (they do not:
   `SetMaxOpenConns(1)`). One `Store` per home per process.
 
-**`internal/mcpserver` is written against this package and nothing else.** That
-is the standing design test: if `lore mcp` cannot be built on the public
-surface, no other consumer can either, and the failure shows up in this repo
-where it is cheap. `cmd/lore` deliberately stays on `internal/` — `init`,
-`space create`, `join`, `enroll`, `backup` and `serve` all need keys, member
-docs and the daemon.
+**`internal/mcpserver` is written against this package and nothing else**, and
+`cmd/lore`'s `init` and `space create` are now wrappers over `lore.Init` and
+`lore.CreateSpace`. That is the standing design test: if the CLI cannot be
+written on the public surface, no other consumer can either, and the failure
+shows up in this repo where it is cheap. It bit twice and both times the API
+gave way — `Identity` carries `DeviceName` and `PersonalSpaceID` because the
+CLI prints them, and the recovery-code confirmation moved after creation
+because `Init` mints the code as part of creating the account.
+
+The rest of `cmd/lore` stays on `internal/` — `join`, `enroll`, `backup`,
+`serve`, `project init` (it needs `project_ref`) and `space pin` need keys,
+member docs, the git remote or the daemon. `project init` reaches the same
+creation through `store.CreateSharedSpace`, which is the single implementation
+the public API, the CLI and the integration tests all call.
 
 ## MCP (internal/mcpserver)
 

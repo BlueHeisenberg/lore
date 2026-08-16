@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BlueHeisenberg/lore"
 	"github.com/BlueHeisenberg/lore/internal/daemon"
 	"github.com/BlueHeisenberg/lore/internal/keys"
 	"github.com/BlueHeisenberg/lore/internal/relayclient"
@@ -44,39 +45,16 @@ func cmdSpace(args []string) error {
 	}
 }
 
-// createSharedSpace creates a shared space with a fresh space_key and signs
-// member-doc v1: the creating account as sole owner (its wrapped space_key
-// travels inside the doc, like every member's).
+// createSharedSpace is `lore project init`'s path into the same creation the
+// public lore.CreateSpace performs. It exists only for the project_ref, which
+// the public API does not take: resolving one means reading os.Getwd and a
+// git config, which is the CLI's job and not a library's.
 func createSharedSpace(st *store.Store, account *keys.Account, name, projectRef string) (store.Space, error) {
-	key, err := space.NewSpaceKey()
-	if err != nil {
-		return store.Space{}, err
-	}
-	sp, err := st.CreateSpace("shared", name, projectRef, key)
-	if err != nil {
-		return store.Space{}, err
-	}
-	wrapped, err := space.WrapSpaceKey(key, account.EncPub)
-	if err != nil {
-		return store.Space{}, err
-	}
 	signPriv, err := account.SigningKey()
 	if err != nil {
 		return store.Space{}, err
 	}
-	doc, err := space.NewMemberDoc(sp.SpaceID, space.Member{
-		AccountPub:      account.SignPub,
-		EncPub:          account.EncPub,
-		Role:            space.RoleOwner,
-		WrappedSpaceKey: wrapped,
-	}, signPriv)
-	if err != nil {
-		return store.Space{}, err
-	}
-	if err := st.AddMemberDoc(sp.SpaceID, doc); err != nil {
-		return store.Space{}, err
-	}
-	return sp, nil
+	return st.CreateSharedSpace(name, projectRef, account.EncPub, signPriv)
 }
 
 func cmdSpaceCreate(args []string) error {
@@ -88,29 +66,20 @@ func cmdSpaceCreate(args []string) error {
 	if len(pos) != 1 {
 		return errors.New("usage: lore space create <name>")
 	}
-	name := pos[0]
-	if name == "personal" {
-		return errors.New(`"personal" is reserved`)
-	}
 	home, err := loreHome()
 	if err != nil {
 		return err
 	}
-	st, account, _, err := openStore(home)
+	s, err := lore.Open(lore.Options{Home: home})
 	if err != nil {
 		return err
 	}
-	defer st.Close()
-	if _, err := st.SpaceByName(name); err == nil {
-		return fmt.Errorf("a space named %q already exists", name)
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return err
-	}
-	sp, err := createSharedSpace(st, account, name, "")
+	defer s.Close()
+	sp, err := s.CreateSpace(context.Background(), pos[0], lore.Shared)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("ok: created topic space %q %s (you are owner)\n", sp.Name, sp.SpaceID)
+	fmt.Printf("ok: created topic space %q %s (you are owner)\n", sp.Name, sp.ID)
 	fmt.Println("tip: `lore space invite " + sp.Name + "` to share it; `lore space pin " + sp.Name + "` to add it to the default search scope")
 	return nil
 }

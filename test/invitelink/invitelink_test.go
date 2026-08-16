@@ -109,34 +109,16 @@ func openDB(t *testing.T, home string) *sql.DB {
 	return db
 }
 
-// createSharedSpace mirrors `lore space create`: shared space + member-doc
-// v1 with the creator as sole owner.
+// createSharedSpace is `lore space create`'s creation path — the same
+// internal call the CLI and the public lore.CreateSpace both make.
 func createSharedSpace(t *testing.T, st *store.Store, account *keys.Account, name string) store.Space {
 	t.Helper()
-	key, err := space.NewSpaceKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	sp, err := st.CreateSpace("shared", name, "", key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wrapped, err := space.WrapSpaceKey(key, account.EncPub)
-	if err != nil {
-		t.Fatal(err)
-	}
 	signPriv, err := account.SigningKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc, err := space.NewMemberDoc(sp.SpaceID, space.Member{
-		AccountPub: account.SignPub, EncPub: account.EncPub,
-		Role: space.RoleOwner, WrappedSpaceKey: wrapped,
-	}, signPriv)
+	sp, err := st.CreateSharedSpace(name, "", account.EncPub, signPriv)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.AddMemberDoc(sp.SpaceID, doc); err != nil {
 		t.Fatal(err)
 	}
 	return sp

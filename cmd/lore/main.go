@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/BlueHeisenberg/lore"
 	"github.com/BlueHeisenberg/lore/internal/distill"
 	"github.com/BlueHeisenberg/lore/internal/keys"
 	"github.com/BlueHeisenberg/lore/internal/space"
@@ -22,7 +23,9 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "lore:", err)
+		// Errors from the public lore package already say "lore: "; the CLI
+		// prefix is for everything else.
+		fmt.Fprintln(os.Stderr, "lore:", strings.TrimPrefix(err.Error(), "lore: "))
 		os.Exit(1)
 	}
 }
@@ -158,6 +161,11 @@ func openStore(home string) (*store.Store, *keys.Account, *keys.Device, error) {
 	return st, account, device, nil
 }
 
+// cmdInit is a wrapper over lore.Init. The confirmation now happens after the
+// home exists, not before: the public Init mints the recovery code as part of
+// creating the account, and the code protects nothing until a signup or a
+// backup wraps something under it — so a mistyped confirmation costs a `lore
+// recovery new`, not the account.
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	name := fs.String("name", "", "device name (default: hostname)")
@@ -169,74 +177,24 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(filepath.Join(home, keys.AccountFile)); err == nil {
-		return fmt.Errorf("already initialized at %s", home)
-	}
-	if *name == "" {
-		if *name, err = os.Hostname(); err != nil || *name == "" {
-			*name = "device"
-		}
-	}
-
-	account, err := keys.GenerateAccount()
+	id, err := lore.Init(home, *name)
 	if err != nil {
 		return err
 	}
-	device, err := keys.GenerateDevice(*name, account)
-	if err != nil {
-		return err
-	}
-	code, err := keys.NewRecoveryCode()
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("account  %s\n", account.AccountID())
-	fmt.Printf("device   %s (%s)\n", device.DeviceID(), device.Name)
-	fmt.Printf("\nrecovery code — shown once, store it in a password manager:\n\n  %s\n\n", code)
+	fmt.Printf("account  %s\n", id.AccountID)
+	fmt.Printf("device   %s (%s)\n", id.DeviceID, id.DeviceName)
+	fmt.Printf("space    personal %s\n", id.PersonalSpaceID)
+	fmt.Printf("\nrecovery code — shown once, store it in a password manager:\n\n  %s\n\n", id.RecoveryCode)
 	if !*yes {
 		fmt.Print("re-type the recovery code to confirm you saved it: ")
-		r := bufio.NewReader(os.Stdin)
-		line, err := r.ReadString('\n')
-		if err != nil && line == "" {
-			return errors.New("recovery code not confirmed (use --yes-i-saved-it to skip)")
-		}
-		if keys.NormalizeRecoveryCode(line) != keys.NormalizeRecoveryCode(code) {
-			return errors.New("recovery code mismatch — nothing was created, run `lore init` again")
+		line, rerr := bufio.NewReader(os.Stdin).ReadString('\n')
+		if (rerr != nil && line == "") ||
+			keys.NormalizeRecoveryCode(line) != keys.NormalizeRecoveryCode(id.RecoveryCode) {
+			return fmt.Errorf("recovery code not confirmed — %s IS initialized; "+
+				"run `lore recovery new` to mint another code and confirm that one", home)
 		}
 	}
-
-	if err := keys.SaveAccount(home, account); err != nil {
-		return err
-	}
-	if err := keys.SaveDevice(home, device); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(home, "blobs"), 0o700); err != nil {
-		return err
-	}
-	cfgPath := filepath.Join(home, "config.json")
-	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
-		b, _ := json.MarshalIndent(config{}, "", "  ")
-		if err := os.WriteFile(cfgPath, append(b, '\n'), 0o600); err != nil {
-			return err
-		}
-	}
-
-	st, _, _, err := openStore(home)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-	key, err := space.NewSpaceKey()
-	if err != nil {
-		return err
-	}
-	sp, err := st.CreateSpace("personal", "personal", "", key)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("space    personal %s\nok: initialized %s\n", sp.SpaceID, home)
+	fmt.Printf("ok: initialized %s\n", home)
 	return nil
 }
 

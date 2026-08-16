@@ -34,17 +34,24 @@ When a session distills learnings, each one is routed: insights about the user g
 ```go
 import "github.com/BlueHeisenberg/lore"
 
+// Create the home once (ErrAlreadyInitialised if it is not empty).
+if _, err := lore.Init("/var/lib/app/lore", "app-pod"); err != nil &&
+    !errors.Is(err, lore.ErrAlreadyInitialised) {
+    return err
+}
+
 st, err := lore.Open(lore.Options{Home: "/var/lib/app/lore", NotifyOnWrite: true})
 if err != nil {
     return err
 }
 defer st.Close()
 
-hits, err := st.Search(ctx, "canary deploy", lore.SearchOpts{Spaces: []string{spaceID}})
+sp, err := st.CreateSpace(ctx, "household", lore.Shared) // returns the id
+hits, err := st.Search(ctx, "canary deploy", lore.SearchOpts{Spaces: []string{sp.ID}})
 ```
 
-The root package is the compatibility promise: spaces, entries, full-text search, and the
-signed, syncing writes behind them. A search hit is a **whole entry**, with the highlighted
+The root package is the compatibility promise: making a home, spaces, entries, full-text
+search, and the signed, syncing writes behind them. A search hit is a **whole entry**, with the highlighted
 snippet alongside it. Everything under `internal/` — sync, signing, membership, the relay,
 the schema — is explicitly not promised and gains no exported accessor; there is no way to
 reach the database, a space key, or the signing encoding.

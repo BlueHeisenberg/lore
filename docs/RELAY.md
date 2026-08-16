@@ -54,7 +54,7 @@ GET  /v1/accounts/{handle}                  handle -> account pubkey (invite dis
 | No device, only one factor | Gone. Nobody can restore it — not even the operator. |
 
 Keeping users out of the "gone" row:
-- **Forced confirmation at init**: the recovery code must be re-typed before `lore init` completes, with explicit copy: "STORE THIS NOW — without it (and your passphrase), losing your devices means your lore is UNRECOVERABLE. Nobody can restore it — not even us."
+- **Forced confirmation at init**: the recovery code must be re-typed at `lore init`, immediately after the account is created (a mismatch fails the command and points at `lore recovery new`), with explicit copy: "STORE THIS NOW — without it (and your passphrase), losing your devices means your lore is UNRECOVERABLE. Nobody can restore it — not even us."
 - **Recovery kit as downloadable file** + suggestion to store it in a password manager (the correct home: encrypted, synced, searchable). If a user emails it to themselves, that's their risk decision with their tools — the product never emails codes (it would transit our pipeline in plaintext and live forever in an inbox).
 - **Periodic re-verification nudge** (Signal-PIN-style): every few months the daemon asks for the recovery code once, catching lost codes while a device still exists to fix it.
 - **`lore backup` counts as a device** for recovery purposes.
