@@ -412,6 +412,77 @@ func TestShareConfirmFlow(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
+// lore_delete
+// ----------------------------------------------------------------------------
+
+func TestDeleteToolScopingAndIdempotency(t *testing.T) {
+	chdirNonGit(t)
+	s := newTestServer(t)
+	personal, _ := s.st.PersonalSpace()
+	team := mkSpace(t, s, "team", "")
+	e := seed(t, s, personal.SpaceID, "ops/deploy", "Deploy procedure",
+		"Deploys go through canary first.", nil, "validated")
+
+	// space is required: an id alone must not delete anything.
+	text, isErr := call(t, s.handleDelete, map[string]any{"id": e.EntryID})
+	if !isErr || !strings.Contains(text, "required") {
+		t.Errorf("missing space should be a tool error:\n%s", text)
+	}
+
+	// wrong space: refused, entry untouched.
+	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.EntryID, "space": "team"})
+	if !isErr || !strings.Contains(text, "nothing was deleted") {
+		t.Errorf("cross-space delete should refuse, got isErr=%v:\n%s", isErr, text)
+	}
+	if live, err := s.st.GetEntry(e.EntryID); err != nil || live.Tombstone {
+		t.Fatalf("cross-space delete tombstoned the entry: %+v %v", live, err)
+	}
+
+	// unknown id, and unknown space.
+	if _, isErr := call(t, s.handleDelete, map[string]any{"id": "no-such-id", "space": "personal"}); !isErr {
+		t.Error("unknown id should be a tool error")
+	}
+	if _, isErr := call(t, s.handleDelete, map[string]any{"id": e.EntryID, "space": "nope"}); !isErr {
+		t.Error("unknown space should be a tool error")
+	}
+
+	// the real delete reports what it removed.
+	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.EntryID, "space": "personal"})
+	if isErr {
+		t.Fatalf("delete errored: %s", text)
+	}
+	for _, want := range []string{"deleted " + e.EntryID, `"Deploy procedure"`, `space "personal"`, "tombstone v2"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("delete response missing %q:\n%s", want, text)
+		}
+	}
+
+	// gone from search and get.
+	text, _ = call(t, s.handleSearch, map[string]any{"query": "canary", "scope": "all"})
+	if !strings.Contains(text, "no results") {
+		t.Errorf("deleted entry still in search:\n%s", text)
+	}
+	text, isErr = call(t, s.handleGet, map[string]any{"id": e.EntryID})
+	if !isErr {
+		t.Errorf("deleted entry still fetchable by id:\n%s", text)
+	}
+	text, _ = call(t, s.handleGet, map[string]any{"domain": "ops/deploy"})
+	if !strings.Contains(text, "no entries in domain") {
+		t.Errorf("deleted entry still in its domain:\n%s", text)
+	}
+
+	// second delete: safe no-op, and honest about it.
+	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.EntryID, "space": "personal"})
+	if isErr || !strings.Contains(text, "already deleted") {
+		t.Errorf("second delete should be a no-op, got isErr=%v:\n%s", isErr, text)
+	}
+	if got, _ := s.st.GetEntry(e.EntryID); got.Version != 2 {
+		t.Errorf("second delete wrote a new version: v%d", got.Version)
+	}
+	_ = team
+}
+
+// ----------------------------------------------------------------------------
 // post-write side effects: daemon poke + distill re-render
 // ----------------------------------------------------------------------------
 

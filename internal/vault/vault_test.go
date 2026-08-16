@@ -106,7 +106,7 @@ func TestBackupRestoreRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.DeleteEntry(e2.EntryID); err != nil {
+	if _, err := st.DeleteEntry(e2.SpaceID, e2.EntryID); err != nil {
 		t.Fatal(err)
 	}
 

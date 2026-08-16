@@ -88,7 +88,7 @@ func TestCRUD(t *testing.T) {
 	}
 
 	// Tombstone delete: hidden from domain/list/search, still fetchable by id.
-	if err := s.DeleteEntry(e.EntryID); err != nil {
+	if _, err := s.DeleteEntry(sp.SpaceID, e.EntryID); err != nil {
 		t.Fatal(err)
 	}
 	dead, err := s.GetEntry(e.EntryID)
@@ -104,6 +104,75 @@ func TestCRUD(t *testing.T) {
 
 	if _, err := s.GetEntry("nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+// TestDeleteScoping pins the delete contract: the tombstone is a real signed
+// version, the delete is space-scoped (entry ids are global), unknown ids are
+// ErrNotFound, and a second delete is a no-op.
+func TestDeleteScoping(t *testing.T) {
+	s, personal := testStore(t)
+	key := make([]byte, 32)
+	rand.Read(key)
+	other, err := s.CreateSpace("shared", "other", "", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.PutEntry(PutParams{SpaceID: personal.SpaceID, Domain: "ops/deploy",
+		Title: "Canary first", Body: "Always deploy through canary."})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Naming the wrong space deletes nothing — an id alone is not enough.
+	if _, err := s.DeleteEntry(other.SpaceID, e.EntryID); !errors.Is(err, ErrWrongSpace) {
+		t.Fatalf("cross-space delete: want ErrWrongSpace, got %v", err)
+	}
+	if live, _ := s.GetEntry(e.EntryID); live.Tombstone {
+		t.Fatal("cross-space delete tombstoned the entry anyway")
+	}
+	if hits, _ := s.Search("canary", SearchOpts{}); len(hits) != 1 {
+		t.Fatalf("entry should still be searchable, got %d hits", len(hits))
+	}
+
+	// Unknown id: ErrNotFound, distinguishable from a real delete.
+	if _, err := s.DeleteEntry(personal.SpaceID, "no-such-id"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown id: want ErrNotFound, got %v", err)
+	}
+
+	// Real delete: signed tombstone, version bumped, new device_seq so it syncs.
+	dead, err := s.DeleteEntry(personal.SpaceID, e.EntryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dead.Tombstone || dead.Version != e.Version+1 || dead.UpdatedAt <= e.UpdatedAt ||
+		dead.DeviceSeq <= e.DeviceSeq || dead.OriginDevice != s.signer.DeviceID {
+		t.Fatalf("bad tombstone: %+v", dead)
+	}
+	stored, err := s.GetEntry(e.EntryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyEntry(stored, s.signer.DeviceID); err != nil {
+		t.Fatalf("tombstone does not verify: %v", err)
+	}
+	if stored.Signature == e.Signature {
+		t.Fatal("tombstone reused the pre-delete signature")
+	}
+	if hits, _ := s.Search("canary", SearchOpts{}); len(hits) != 0 {
+		t.Fatalf("deleted entry still searchable: %+v", hits)
+	}
+	if es, _ := s.ListEntries(personal.SpaceID); len(es) != 0 {
+		t.Fatalf("deleted entry still listed: %d", len(es))
+	}
+
+	// Idempotent: deleting again returns the same tombstone, writes nothing.
+	again, err := s.DeleteEntry(personal.SpaceID, e.EntryID)
+	if err != nil {
+		t.Fatalf("second delete: %v", err)
+	}
+	if again.Version != dead.Version || again.UpdatedAt != dead.UpdatedAt {
+		t.Fatalf("second delete wrote a new version: %+v", again)
 	}
 }
 

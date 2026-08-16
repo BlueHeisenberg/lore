@@ -252,6 +252,11 @@ func (s *Server) handleGet(_ context.Context, req mcplib.CallToolRequest) (*mcpl
 		if err != nil {
 			return errResult("get: %v", err)
 		}
+		// GetEntry deliberately returns tombstones (sync needs them); a
+		// deleted entry is simply gone as far as a reader is concerned.
+		if e.Tombstone {
+			return errResult("no entry with id %q (it was deleted)", id)
+		}
 		renderEntry(&b, e, names[e.SpaceID])
 		return textResult(strings.TrimRight(b.String(), "\n"))
 	}
@@ -327,6 +332,50 @@ func (s *Server) handlePut(_ context.Context, req mcplib.CallToolRequest) (*mcpl
 	s.afterWrite(target.SpaceID)
 	return textResult(fmt.Sprintf("stored %s (v%d) in space %q — domain %s, confidence %s, origin %s",
 		e.EntryID, e.Version, target.Name, e.Domain, e.Confidence, e.Origin))
+}
+
+// ----------------------------------------------------------------------------
+// lore_delete
+// ----------------------------------------------------------------------------
+
+// handleDelete tombstones one entry. `space` is required and must match the
+// entry's own space: entry ids are global (lore_get is not space-scoped), so
+// an id alone is a capability to name any entry anywhere — requiring the
+// space means a consumer holding an id from one space cannot delete out of
+// another. No confirm dance: unlike lore_share, nothing crosses a privacy
+// boundary here, and a model confirming with itself is not a safety property
+// — the space match is the guard, and the caller's UI is the confirmation.
+func (s *Server) handleDelete(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	id := argString(req, "id")
+	spaceArg := argString(req, "space")
+	if id == "" || spaceArg == "" {
+		return errResult("`id` and `space` are required")
+	}
+	sp, err := s.resolveSpace(spaceArg)
+	if err != nil {
+		return errResult("unknown space %q (try lore_spaces)", spaceArg)
+	}
+	e, err := s.st.GetEntry(id)
+	if errors.Is(err, store.ErrNotFound) {
+		return errResult("no entry with id %q — nothing was deleted", id)
+	}
+	if err != nil {
+		return errResult("get: %v", err)
+	}
+	if e.SpaceID != sp.SpaceID {
+		return errResult("entry %s is not in space %q — nothing was deleted (delete is space-scoped; pass the space the entry actually lives in)", id, sp.Name)
+	}
+	if e.Tombstone {
+		return textResult(fmt.Sprintf("already deleted: %s (%q) in space %q, tombstone v%d — nothing to do",
+			e.EntryID, e.Title, sp.Name, e.Version))
+	}
+	dead, err := s.st.DeleteEntry(sp.SpaceID, id)
+	if err != nil {
+		return errResult("delete: %v", err)
+	}
+	s.afterWrite(sp.SpaceID)
+	return textResult(fmt.Sprintf("deleted %s (%q, domain %s) from space %q — signed tombstone v%d; it no longer appears in lore_search or lore_get, and the delete propagates to the other devices",
+		dead.EntryID, dead.Title, dead.Domain, sp.Name, dead.Version))
 }
 
 // ----------------------------------------------------------------------------

@@ -129,6 +129,7 @@ lore invites                       list/accept pending relay invites
 lore project init                  create/join project space for CWD git remote
 lore project link <space>
 lore share entry <id> --to <space>  copy-out with review (prints content, confirms)
+lore delete entry <id> --space <s>  tombstone one entry (prints content, confirms; --yes for automation; --space required: ids are global)
 lore serve                         daemon (foreground; --admin-port for tests)
 lore mcp                           stdio MCP server
 lore enroll / lore approve <code>  new-device flow (LAN)
@@ -193,6 +194,7 @@ Direct-DB mode (WAL makes multi-process safe); after writes, poke the daemon's a
 | lore_search | query (req), scope, space, domain, marker, confidence, limit (default 8) → compact list: id, space, domain, title, snippet, confidence, markers |
 | lore_get | id or domain (one req) → full entries |
 | lore_put | title, body, domain (req); space (default routed), markers, confidence (default provisional), origin (default evidence) |
+| lore_delete | id, space (both req) → signed tombstone; refuses when the entry is not in that space (ids are global); already-deleted = no-op, not an error; no confirm param (the space match is the guard) |
 | lore_spaces | none → spaces, roles, member counts, sync state |
 | lore_share | entry_id, to_space (req) → refuses profile/feedback; returns content preview + requires confirm=true param to execute |
 

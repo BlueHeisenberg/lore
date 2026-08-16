@@ -32,6 +32,10 @@ var (
 	// ErrNotWriter: this account lacks the writer/owner role required to
 	// author entries in the shared space (per its verified member list).
 	ErrNotWriter = errors.New("this account is not a writer/owner of the space")
+	// ErrWrongSpace: the entry exists, but not in the space the caller named.
+	// Entry ids are global, so every operation that names both an id and a
+	// space refuses the mismatch instead of acting on the other space.
+	ErrWrongSpace = errors.New("entry is not in that space")
 )
 
 // Signer carries the identity used to author local writes.

@@ -54,6 +54,12 @@ func TestAddMemberDocAndRoles(t *testing.T) {
 		t.Fatalf("want ErrPersonalSpace, got %v", err)
 	}
 
+	// Entry written before the space had a member list (still writable then).
+	early, err := s.PutEntry(PutParams{SpaceID: shared.SpaceID, Domain: "d/early", Title: "t", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	doc, ownerPriv, ownerPub := signedDocFor(t, s, shared)
 	if err := s.AddMemberDoc(shared.SpaceID, doc); err != nil {
 		t.Fatal(err)
@@ -83,6 +89,11 @@ func TestAddMemberDocAndRoles(t *testing.T) {
 	// account: not in the doc) may no longer write into the space.
 	if _, err := s.PutEntry(PutParams{SpaceID: shared.SpaceID, Domain: "d/x", Title: "t", Body: "b"}); !errors.Is(err, ErrNotWriter) {
 		t.Fatalf("non-member local put: want ErrNotWriter, got %v", err)
+	}
+	// A tombstone is a write too: a non-writer may not delete either (the
+	// sync receive path would reject the tombstone anyway).
+	if _, err := s.DeleteEntry(shared.SpaceID, early.EntryID); !errors.Is(err, ErrNotWriter) {
+		t.Fatalf("non-member local delete: want ErrNotWriter, got %v", err)
 	}
 
 	// Add the store's signer as writer (owner-signed v2): put succeeds again.

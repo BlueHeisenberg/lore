@@ -189,16 +189,8 @@ func (s *Store) PutEntry(p PutParams) (Entry, error) {
 	if err != nil {
 		return Entry{}, fmt.Errorf("space %s: %w", p.SpaceID, err)
 	}
-	// Local-write membership rule (contract: checked on both write and
-	// sync-receive): once a shared space has a verified member list, only
-	// writer/owner accounts may author entries into it. Shared spaces
-	// without any member doc (pre-membership) stay writable locally.
-	if sp.Kind == "shared" {
-		if doc, ok, err := s.LatestMemberDoc(sp.SpaceID); err != nil {
-			return Entry{}, err
-		} else if ok && !doc.CanWrite(s.signer.AccountID) {
-			return Entry{}, fmt.Errorf("space %s: %w", sp.Name, ErrNotWriter)
-		}
+	if err := s.checkWriter(sp); err != nil {
+		return Entry{}, err
 	}
 
 	now := tsNow()
@@ -223,7 +215,7 @@ func (s *Store) PutEntry(p PutParams) (Entry, error) {
 		prev, err := s.GetEntry(p.EntryID)
 		if err == nil {
 			if prev.SpaceID != p.SpaceID {
-				return Entry{}, errors.New("entry belongs to a different space")
+				return Entry{}, ErrWrongSpace
 			}
 			e.CreatedAt = prev.CreatedAt
 			e.Version = prev.Version + 1
@@ -257,6 +249,25 @@ func (s *Store) PutEntry(p PutParams) (Entry, error) {
 		return Entry{}, err
 	}
 	return e, nil
+}
+
+// checkWriter enforces the local-write membership rule (contract: checked on
+// both write and sync-receive): once a shared space has a verified member
+// list, only writer/owner accounts may write into it — a tombstone is a write
+// like any other. Shared spaces without any member doc (pre-membership) and
+// the personal space stay writable locally.
+func (s *Store) checkWriter(sp Space) error {
+	if sp.Kind != "shared" {
+		return nil
+	}
+	doc, ok, err := s.LatestMemberDoc(sp.SpaceID)
+	if err != nil {
+		return err
+	}
+	if ok && !doc.CanWrite(s.signer.AccountID) {
+		return fmt.Errorf("space %s: %w", sp.Name, ErrNotWriter)
+	}
+	return nil
 }
 
 // nextDeviceSeq allocates the per-(space, device) monotonic sequence from kv,
@@ -403,17 +414,34 @@ func (s *Store) ListEntries(spaceID string) ([]Entry, error) {
 		WHERE space_id=? AND tombstone=0 ORDER BY domain, title`, spaceID)
 }
 
-// DeleteEntry writes a tombstone version of the entry (deletes propagate).
-func (s *Store) DeleteEntry(entryID string) error {
+// DeleteEntry writes a tombstone version of the entry (deletes propagate as
+// a signed, versioned write under the same LWW rule as any other).
+//
+// The delete is space-scoped: entry ids are global, so a caller holding an id
+// must also name the space it lives in, and a mismatch is refused with
+// ErrWrongSpace instead of deleting another space's entry. Unknown ids return
+// ErrNotFound. Deleting an already-tombstoned entry is a no-op, not an error
+// (idempotent); the returned Entry is then the existing tombstone.
+func (s *Store) DeleteEntry(spaceID, entryID string) (Entry, error) {
 	if s.signer == nil {
-		return ErrNoSigner
+		return Entry{}, ErrNoSigner
 	}
 	e, err := s.GetEntry(entryID)
 	if err != nil {
-		return err
+		return Entry{}, err
+	}
+	if e.SpaceID != spaceID {
+		return Entry{}, ErrWrongSpace
+	}
+	sp, err := s.GetSpace(spaceID)
+	if err != nil {
+		return Entry{}, fmt.Errorf("space %s: %w", spaceID, err)
+	}
+	if err := s.checkWriter(sp); err != nil {
+		return Entry{}, err
 	}
 	if e.Tombstone {
-		return nil
+		return e, nil
 	}
 	now := tsNow()
 	if now <= e.UpdatedAt {
@@ -427,21 +455,24 @@ func (s *Store) DeleteEntry(entryID string) error {
 	e.OriginDevice = s.signer.DeviceID
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return Entry{}, err
 	}
 	defer tx.Rollback()
 	seq, err := nextDeviceSeq(tx, e.SpaceID, e.OriginDevice)
 	if err != nil {
-		return err
+		return Entry{}, err
 	}
 	e.DeviceSeq = seq
 	if err := SignEntry(&e, s.signer.DevicePriv); err != nil {
-		return err
+		return Entry{}, err
 	}
 	if err := upsertEntry(tx, e); err != nil {
-		return err
+		return Entry{}, err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return Entry{}, err
+	}
+	return e, nil
 }
 
 // ApplyRemote applies an incoming entry version under last-writer-wins:

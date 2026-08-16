@@ -1,4 +1,4 @@
-// Package mcpserver is lore's stdio MCP server: five tools over the local
+// Package mcpserver is lore's stdio MCP server: six tools over the local
 // SQLite store, zero resources, zero prompts, zero per-turn injection.
 // Contract: docs/IMPLEMENTATION.md (MCP section). It opens the store
 // directly (WAL makes multi-process access safe); after writes it pokes the
@@ -66,7 +66,7 @@ func Open(home string) (*Server, error) {
 // Close closes the underlying store.
 func (s *Server) Close() error { return s.st.Close() }
 
-// MCPServer builds the mark3labs MCP server with lore's five tools
+// MCPServer builds the mark3labs MCP server with lore's six tools
 // registered. No resources, no prompts.
 func (s *Server) MCPServer() *server.MCPServer {
 	m := server.NewMCPServer("lore", version,
@@ -155,6 +155,21 @@ func (s *Server) registerTools(m *server.MCPServer) {
 		mcplib.WithString("id",
 			mcplib.Description("Existing entry id to write a new version of.")),
 	), s.handlePut)
+
+	m.AddTool(mcplib.NewTool("lore_delete",
+		mcplib.WithDescription(
+			"Delete one entry: writes a signed tombstone, so it stops appearing in "+
+				"lore_search and lore_get here and on every synced device. Space-scoped "+
+				"on purpose — entry ids are global, so `space` must be the space the "+
+				"entry actually lives in; an id from another space is refused, not "+
+				"deleted. Deleting an already-deleted entry is a safe no-op. There is "+
+				"no undo: only delete what the user asked you to delete.",
+		),
+		mcplib.WithString("id", mcplib.Required(),
+			mcplib.Description("Entry id to delete (as returned by lore_put or lore_search).")),
+		mcplib.WithString("space", mcplib.Required(),
+			mcplib.Description("Space the entry lives in, name or id. The delete is refused if the entry is not in it.")),
+	), s.handleDelete)
 
 	m.AddTool(mcplib.NewTool("lore_spaces",
 		mcplib.WithDescription("List lore spaces with kind, name, member count and entry count."),

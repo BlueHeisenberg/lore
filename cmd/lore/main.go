@@ -399,6 +399,12 @@ func cmdGet(args []string) error {
 	names := spaceNames(st)
 
 	if e, err := st.GetEntry(arg); err == nil {
+		// GetEntry deliberately returns tombstones (sync needs them); a
+		// deleted entry is gone as far as a reader is concerned — but say so,
+		// rather than pretending the id never existed.
+		if e.Tombstone {
+			return fmt.Errorf("entry %s was deleted (tombstone v%d, %s)", e.EntryID, e.Version, e.UpdatedAt)
+		}
 		printEntry(os.Stdout, e, names[e.SpaceID])
 		return nil
 	} else if !errors.Is(err, store.ErrNotFound) {

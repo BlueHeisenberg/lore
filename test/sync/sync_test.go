@@ -188,7 +188,7 @@ func TestTwoDeviceEnrollAndSync(t *testing.T) {
 	})
 
 	// Delete on B -> tombstone appears on A.
-	if err := stB.DeleteEntry(entry.EntryID); err != nil {
+	if _, err := stB.DeleteEntry(entry.SpaceID, entry.EntryID); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, dB, 15*time.Second, "tombstone to reach A", func() error {
