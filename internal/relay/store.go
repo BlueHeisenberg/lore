@@ -155,6 +155,15 @@ func OpenStore(dataDir string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relay: open db: %w", err)
 	}
+	// Serialize access through one connection, as internal/store does. Two
+	// pooled connections both running BEGIN(deferred)+SELECT+INSERT deadlock
+	// on the read→write upgrade, and busy_timeout does NOT retry an upgrade:
+	// SQLite returns SQLITE_BUSY immediately, surfacing as a 500. Observed as
+	// a flaky "MintInvite: HTTP 500" whenever a daemon relay runner pushed
+	// concurrently with a mint.
+	// ponytail: one connection caps write throughput; if the relay ever needs
+	// concurrent readers, switch the write paths to BEGIN IMMEDIATE instead.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("relay: apply schema: %w", err)
