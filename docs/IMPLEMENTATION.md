@@ -5,7 +5,7 @@ Binding contract for the build. Design rationale lives in ARCHITECTURE.md / RELA
 ## Toolchain & dependencies
 
 - Go 1.25, module `github.com/BlueHeisenberg/lore`.
-- `go.mod` has `replace github.com/BlueHeisenberg/agentmesh => D:\Projects\agentmesh` until Phase 0 is pushed/tagged (tracked in SETUP-ACCOUNTS.md).
+- `github.com/BlueHeisenberg/agentmesh` is pinned at a published tag (v0.7.0). **No `replace` directive may exist in this go.mod**: a `replace` in a dependency's go.mod is ignored by the consuming module, so any local-path replace here breaks every downstream importer at resolution time.
 - Dependencies (keep this list tight):
   - `modernc.org/sqlite` — pure Go, no cgo (Windows-friendly). WAL mode always.
   - `github.com/mark3labs/mcp-go` — same MCP library as agentmesh.

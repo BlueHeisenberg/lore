@@ -2,10 +2,8 @@ module github.com/BlueHeisenberg/lore
 
 go 1.25.0
 
-replace github.com/BlueHeisenberg/agentmesh => D:\Projects\agentmesh
-
 require (
-	github.com/BlueHeisenberg/agentmesh v0.0.0
+	github.com/BlueHeisenberg/agentmesh v0.7.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.20.1
