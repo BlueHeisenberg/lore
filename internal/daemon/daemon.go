@@ -64,9 +64,9 @@ type Daemon struct {
 	token     string
 
 	mirrorDir string
-	watcher    *distill.Watcher
-	renderMu   sync.Mutex
-	relay      *RelayRunner
+	watcher   *distill.Watcher
+	renderMu  sync.Mutex
+	relay     *RelayRunner
 
 	mu       sync.Mutex
 	lastSync time.Time
@@ -117,17 +117,17 @@ func New(home string, opts Options) (*Daemon, error) {
 		return nil, err
 	}
 	d := &Daemon{
-		home:       home,
-		opts:       opts,
-		account:    account,
-		device:     device,
-		st:         st,
-		db:         db,
-		cert:       cert,
-		client:     transport.NewClient(cert),
-		certHdr:    syncproto.EncodeDeviceCert(device.Cert),
-		reg:        discovery.NewRegistry(device.DeviceID()),
-		poke:       make(chan chan struct{}, 8),
+		home:      home,
+		opts:      opts,
+		account:   account,
+		device:    device,
+		st:        st,
+		db:        db,
+		cert:      cert,
+		client:    transport.NewClient(cert),
+		certHdr:   syncproto.EncodeDeviceCert(device.Cert),
+		reg:       discovery.NewRegistry(device.DeviceID()),
+		poke:      make(chan chan struct{}, 8),
 		mirrorDir: explicitMirrorDir(home),
 	}
 	return d, nil
