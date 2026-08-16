@@ -16,7 +16,7 @@ import (
 
 	"github.com/BlueHeisenberg/lore/internal/space"
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 // Typed errors for the hard rules enforced at the store layer.
@@ -27,6 +27,16 @@ var (
 	ErrUserModel = errors.New("user-model entries (profile/, feedback/) cannot be copied out of the personal space")
 	// ErrNotFound: entry or space does not exist.
 	ErrNotFound = errors.New("not found")
+	// ErrSpaceNotFound: this store holds no such space. It wraps ErrNotFound
+	// so callers that only care "missing" keep working, while callers that
+	// must tell a missing space from a missing entry (a configuration fault
+	// versus a missing record) can ask for it specifically.
+	ErrSpaceNotFound = fmt.Errorf("space %w", ErrNotFound)
+	// ErrSchemaTooNew: the database was written by a newer lore than this
+	// build. Refused at Open rather than tolerated: migrate used to return
+	// early for any v >= schemaVersion, so an older build would silently read
+	// a newer schema's columns.
+	ErrSchemaTooNew = errors.New("database schema is newer than this build")
 	// ErrNoSigner: a write was attempted on a store opened without keys.
 	ErrNoSigner = errors.New("store opened without a signer; writes unavailable")
 	// ErrNotWriter: this account lacks the writer/owner role required to
@@ -128,7 +138,11 @@ func (s *Store) migrate() error {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if v >= schemaVersion {
+	if v > schemaVersion {
+		return fmt.Errorf("%w: database is at v%d, this build understands v%d",
+			ErrSchemaTooNew, v, schemaVersion)
+	}
+	if v == schemaVersion {
 		return nil
 	}
 	if _, err := s.db.Exec(schema); err != nil {
@@ -141,6 +155,28 @@ func (s *Store) migrate() error {
 
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
+
+// IsBusy reports whether err is SQLite's "database is locked" (SQLITE_BUSY /
+// SQLITE_LOCKED, extended codes masked off). Lives here because this package
+// owns the driver: nothing above it should have to know which SQLite binding
+// is in use to recognise contention.
+//
+// Contention is real and by design: `lore serve`, internal/syncproto's second
+// connection and any CLI invocation open the same lore.db. WAL plus
+// busy_timeout absorbs most of it, but a deferred transaction upgrading from
+// read to write gets SQLITE_BUSY immediately — busy_timeout does not retry an
+// upgrade.
+func IsBusy(err error) bool {
+	var se *sqlite.Error
+	if !errors.As(err, &se) {
+		return false
+	}
+	switch se.Code() & 0xff {
+	case 5, 6: // SQLITE_BUSY, SQLITE_LOCKED
+		return true
+	}
+	return false
+}
 
 // Space is the sharing unit; see docs/ARCHITECTURE.md.
 type Space struct {
@@ -225,7 +261,7 @@ func (s *Store) spaceWhere(where string, args ...any) (Space, error) {
 		return Space{}, err
 	}
 	if len(sps) == 0 {
-		return Space{}, ErrNotFound
+		return Space{}, ErrSpaceNotFound
 	}
 	return sps[0], nil
 }

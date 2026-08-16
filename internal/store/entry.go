@@ -414,6 +414,15 @@ func (s *Store) ListEntries(spaceID string) ([]Entry, error) {
 		WHERE space_id=? AND tombstone=0 ORDER BY domain, title`, spaceID)
 }
 
+// CountEntries returns how many live entries a space holds, without reading
+// a single body — which is what counting them via ListEntries does.
+func (s *Store) CountEntries(spaceID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM entries WHERE space_id=? AND tombstone=0`,
+		spaceID).Scan(&n)
+	return n, err
+}
+
 // DeleteEntry writes a tombstone version of the entry (deletes propagate as
 // a signed, versioned write under the same LWW rule as any other).
 //

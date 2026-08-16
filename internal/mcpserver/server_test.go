@@ -14,13 +14,16 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/BlueHeisenberg/lore"
 	"github.com/BlueHeisenberg/lore/internal/keys"
 	"github.com/BlueHeisenberg/lore/internal/space"
 	"github.com/BlueHeisenberg/lore/internal/store"
 )
 
+var ctx = context.Background()
+
 // newTestServer builds a Server over a temp LORE_HOME with fresh keys and a
-// personal space. It never touches the real ~/.lore or ~/.claude/distill.
+// personal space. It never touches the real ~/.lore or the real mirror dir.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	home := t.TempDir()
@@ -38,37 +41,63 @@ func newTestServer(t *testing.T) *Server {
 	if err := keys.SaveDevice(home, device); err != nil {
 		t.Fatal(err)
 	}
+	createSpace(t, home, "personal", "personal", "")
 	s, err := Open(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	key, err := space.NewSpaceKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.st.CreateSpace("personal", "personal", "", key); err != nil {
-		t.Fatal(err)
-	}
 	return s
 }
 
-func mkSpace(t *testing.T, s *Server, name, projectRef string) store.Space {
+// createSpace makes a space directly through the internal store, because
+// space creation is deliberately absent from lore's public API: spaces are
+// made out of band by a person who chose a name and a sharing posture. The
+// store is opened and closed around the one call so nothing else in the test
+// shares a home with a second open store.
+func createSpace(t *testing.T, home, kind, name, projectRef string) {
 	t.Helper()
+	account, err := keys.LoadAccount(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := keys.LoadDevice(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, err := device.PrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(home, "lore.db"), &store.Signer{
+		AccountID: account.AccountID(), DeviceID: device.DeviceID(), DevicePriv: priv,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
 	key, err := space.NewSpaceKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp, err := s.st.CreateSpace("shared", name, projectRef, key)
+	if _, err := st.CreateSpace(kind, name, projectRef, key); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mkSpace(t *testing.T, s *Server, name, projectRef string) lore.Space {
+	t.Helper()
+	createSpace(t, s.lo.Home(), "shared", name, projectRef)
+	sp, err := s.lo.SpaceByName(ctx, name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return sp
 }
 
-func seed(t *testing.T, s *Server, spaceID, domain, title, body string, markers []string, confidence string) store.Entry {
+func seed(t *testing.T, s *Server, spaceID, domain, title, body string, markers []string, confidence lore.Confidence) lore.Entry {
 	t.Helper()
-	e, err := s.st.PutEntry(store.PutParams{
+	e, err := s.lo.PutEntry(ctx, lore.PutParams{
 		SpaceID: spaceID, Domain: domain, Title: title, Body: body,
 		Markers: markers, Confidence: confidence,
 	})
@@ -113,15 +142,15 @@ func chdirNonGit(t *testing.T) {
 func TestSearchScopingAndFilters(t *testing.T) {
 	chdirNonGit(t)
 	s := newTestServer(t)
-	personal, _ := s.st.PersonalSpace()
+	personal, _ := s.lo.PersonalSpace(ctx)
 	team := mkSpace(t, s, "team", "")
 
-	seed(t, s, personal.SpaceID, "ops/deploy", "Deploy procedure",
-		"Deploys go through canary first.", []string{"[NON-NEGOTIABLE]"}, "validated")
-	seed(t, s, personal.SpaceID, "craft/go-testing", "Table tests",
-		"Prefer table-driven deploy-unrelated tests.", nil, "provisional")
-	seed(t, s, team.SpaceID, "ops/deploy", "Team deploy",
-		"Team deploys use blue-green.", nil, "provisional")
+	seed(t, s, personal.ID, "ops/deploy", "Deploy procedure",
+		"Deploys go through canary first.", []string{"[NON-NEGOTIABLE]"}, lore.Validated)
+	seed(t, s, personal.ID, "craft/go-testing", "Table tests",
+		"Prefer table-driven deploy-unrelated tests.", nil, lore.Provisional)
+	seed(t, s, team.ID, "ops/deploy", "Team deploy",
+		"Team deploys use blue-green.", nil, lore.Provisional)
 
 	// default scope: personal only (no CWD project space, team not pinned)
 	text, isErr := call(t, s.handleSearch, map[string]any{"query": "deploy"})
@@ -198,17 +227,17 @@ func TestSearchScopingAndFilters(t *testing.T) {
 func TestGetByIDAndDomain(t *testing.T) {
 	chdirNonGit(t)
 	s := newTestServer(t)
-	personal, _ := s.st.PersonalSpace()
-	e := seed(t, s, personal.SpaceID, "ops/deploy", "Deploy procedure",
-		"Deploys go through canary first.", []string{"[NON-NEGOTIABLE]"}, "validated")
-	seed(t, s, personal.SpaceID, "ops/deploy", "Rollback",
-		"Rollback is one command.", nil, "provisional")
+	personal, _ := s.lo.PersonalSpace(ctx)
+	e := seed(t, s, personal.ID, "ops/deploy", "Deploy procedure",
+		"Deploys go through canary first.", []string{"[NON-NEGOTIABLE]"}, lore.Validated)
+	seed(t, s, personal.ID, "ops/deploy", "Rollback",
+		"Rollback is one command.", nil, lore.Provisional)
 
-	text, isErr := call(t, s.handleGet, map[string]any{"id": e.EntryID})
+	text, isErr := call(t, s.handleGet, map[string]any{"id": e.ID})
 	if isErr {
 		t.Fatalf("get by id errored: %s", text)
 	}
-	for _, want := range []string{"# Deploy procedure", e.EntryID, "canary first", "validated", "[NON-NEGOTIABLE]", "space personal"} {
+	for _, want := range []string{"# Deploy procedure", e.ID, "canary first", "validated", "[NON-NEGOTIABLE]", "space personal"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("get by id missing %q:\n%s", want, text)
 		}
@@ -223,7 +252,7 @@ func TestGetByIDAndDomain(t *testing.T) {
 	if _, isErr := call(t, s.handleGet, map[string]any{}); !isErr {
 		t.Error("neither id nor domain should error")
 	}
-	if _, isErr := call(t, s.handleGet, map[string]any{"id": e.EntryID, "domain": "ops/deploy"}); !isErr {
+	if _, isErr := call(t, s.handleGet, map[string]any{"id": e.ID, "domain": "ops/deploy"}); !isErr {
 		t.Error("both id and domain should error")
 	}
 	if _, isErr := call(t, s.handleGet, map[string]any{"id": "no-such-id"}); !isErr {
@@ -250,7 +279,6 @@ func TestPutRouting(t *testing.T) {
 	t.Chdir(projDir)
 
 	s := newTestServer(t)
-	personal, _ := s.st.PersonalSpace()
 	proj := mkSpace(t, s, "mcp-routing-proj", space.ProjectRef(remote))
 
 	put := func(args map[string]any) string {
@@ -279,8 +307,8 @@ func TestPutRouting(t *testing.T) {
 	if !strings.Contains(text, `space "mcp-routing-proj"`) {
 		t.Errorf("subject=codebase should land in the project space:\n%s", text)
 	}
-	if es, _ := s.st.ListEntries(proj.SpaceID); len(es) != 1 {
-		t.Errorf("project space should hold 1 entry, has %d", len(es))
+	if n, _ := s.lo.CountEntries(ctx, proj.ID); n != 1 {
+		t.Errorf("project space should hold 1 entry, has %d", n)
 	}
 
 	// explicit space overrides routing
@@ -297,7 +325,7 @@ func TestPutRouting(t *testing.T) {
 
 	// markers normalized
 	put(map[string]any{"title": "T5", "body": "b", "domain": "ops/e", "markers": "context, non-negotiable"})
-	res, err := s.st.Search("T5", store.SearchOpts{})
+	res, err := s.lo.Search(ctx, "T5", lore.SearchOpts{})
 	if err != nil || len(res) != 1 {
 		t.Fatalf("seeded T5 not found: %v", err)
 	}
@@ -316,7 +344,6 @@ func TestPutRouting(t *testing.T) {
 	if !strings.Contains(text, `space "personal"`) {
 		t.Errorf("codebase without project space should fall back to personal:\n%s", text)
 	}
-	_ = personal
 }
 
 // ----------------------------------------------------------------------------
@@ -326,11 +353,11 @@ func TestPutRouting(t *testing.T) {
 func TestSpacesList(t *testing.T) {
 	chdirNonGit(t)
 	s := newTestServer(t)
-	personal, _ := s.st.PersonalSpace()
+	personal, _ := s.lo.PersonalSpace(ctx)
 	team := mkSpace(t, s, "team", "")
-	seed(t, s, personal.SpaceID, "ops/a", "A", "body a", nil, "")
-	seed(t, s, team.SpaceID, "ops/b", "B", "body b", nil, "")
-	seed(t, s, team.SpaceID, "ops/c", "C", "body c", nil, "")
+	seed(t, s, personal.ID, "ops/a", "A", "body a", nil, "")
+	seed(t, s, team.ID, "ops/b", "B", "body b", nil, "")
+	seed(t, s, team.ID, "ops/c", "C", "body c", nil, "")
 
 	text, isErr := call(t, s.handleSpaces, nil)
 	if isErr {
@@ -353,52 +380,52 @@ func TestSpacesList(t *testing.T) {
 func TestShareConfirmFlow(t *testing.T) {
 	chdirNonGit(t)
 	s := newTestServer(t)
-	personal, _ := s.st.PersonalSpace()
+	personal, _ := s.lo.PersonalSpace(ctx)
 	team := mkSpace(t, s, "team", "")
-	e := seed(t, s, personal.SpaceID, "ops/deploy", "Deploy procedure",
-		"Deploys go through canary first.", nil, "validated")
+	e := seed(t, s, personal.ID, "ops/deploy", "Deploy procedure",
+		"Deploys go through canary first.", nil, lore.Validated)
 
 	// preview: full content, no copy yet
-	text, isErr := call(t, s.handleShare, map[string]any{"entry_id": e.EntryID, "to_space": "team"})
+	text, isErr := call(t, s.handleShare, map[string]any{"entry_id": e.ID, "to_space": "team"})
 	if isErr {
 		t.Fatalf("preview errored: %s", text)
 	}
 	if !strings.Contains(text, "canary first") || !strings.Contains(text, "confirm:true") {
 		t.Errorf("preview should show full content and ask for confirm:true:\n%s", text)
 	}
-	if es, _ := s.st.ListEntries(team.SpaceID); len(es) != 0 {
+	if es, _ := s.lo.ListEntries(ctx, team.ID); len(es) != 0 {
 		t.Fatalf("preview must not copy; team has %d entries", len(es))
 	}
 
 	// confirm=true executes the copy with provenance
-	text, isErr = call(t, s.handleShare, map[string]any{"entry_id": e.EntryID, "to_space": "team", "confirm": true})
+	text, isErr = call(t, s.handleShare, map[string]any{"entry_id": e.ID, "to_space": "team", "confirm": true})
 	if isErr {
 		t.Fatalf("confirm errored: %s", text)
 	}
-	es, _ := s.st.ListEntries(team.SpaceID)
+	es, _ := s.lo.ListEntries(ctx, team.ID)
 	if len(es) != 1 {
 		t.Fatalf("team should have 1 entry after confirm, has %d", len(es))
 	}
-	if es[0].Provenance == nil || es[0].Provenance.SourceEntry != e.EntryID {
+	if es[0].Provenance == nil || es[0].Provenance.SourceEntry != e.ID {
 		t.Errorf("copied entry missing provenance: %+v", es[0].Provenance)
 	}
-	if !strings.Contains(text, es[0].EntryID) {
+	if !strings.Contains(text, es[0].ID) {
 		t.Errorf("confirm response should carry the new entry id:\n%s", text)
 	}
 	// source still in personal (copy, not move)
-	if _, err := s.st.GetEntry(e.EntryID); err != nil {
+	if _, err := s.lo.GetEntry(ctx, e.ID); err != nil {
 		t.Errorf("source entry gone after share: %v", err)
 	}
 
 	// user-model entries refuse at preview AND confirm
-	um := seed(t, s, personal.SpaceID, "profile/trust", "Trust map", "secret", nil, "")
+	um := seed(t, s, personal.ID, "profile/trust", "Trust map", "secret", nil, "")
 	for _, confirm := range []bool{false, true} {
-		text, isErr = call(t, s.handleShare, map[string]any{"entry_id": um.EntryID, "to_space": "team", "confirm": confirm})
+		text, isErr = call(t, s.handleShare, map[string]any{"entry_id": um.ID, "to_space": "team", "confirm": confirm})
 		if !isErr || !strings.Contains(text, "never leave the personal space") {
 			t.Errorf("user-model share (confirm=%v) should refuse clearly, got isErr=%v:\n%s", confirm, isErr, text)
 		}
 	}
-	if es, _ := s.st.ListEntries(team.SpaceID); len(es) != 1 {
+	if es, _ := s.lo.ListEntries(ctx, team.ID); len(es) != 1 {
 		t.Errorf("user-model entry leaked into team space")
 	}
 
@@ -406,7 +433,7 @@ func TestShareConfirmFlow(t *testing.T) {
 	if _, isErr := call(t, s.handleShare, map[string]any{"entry_id": "nope", "to_space": "team"}); !isErr {
 		t.Error("unknown entry should error")
 	}
-	if _, isErr := call(t, s.handleShare, map[string]any{"entry_id": e.EntryID, "to_space": "nope"}); !isErr {
+	if _, isErr := call(t, s.handleShare, map[string]any{"entry_id": e.ID, "to_space": "nope"}); !isErr {
 		t.Error("unknown space should error")
 	}
 }
@@ -418,40 +445,40 @@ func TestShareConfirmFlow(t *testing.T) {
 func TestDeleteToolScopingAndIdempotency(t *testing.T) {
 	chdirNonGit(t)
 	s := newTestServer(t)
-	personal, _ := s.st.PersonalSpace()
-	team := mkSpace(t, s, "team", "")
-	e := seed(t, s, personal.SpaceID, "ops/deploy", "Deploy procedure",
-		"Deploys go through canary first.", nil, "validated")
+	personal, _ := s.lo.PersonalSpace(ctx)
+	mkSpace(t, s, "team", "")
+	e := seed(t, s, personal.ID, "ops/deploy", "Deploy procedure",
+		"Deploys go through canary first.", nil, lore.Validated)
 
 	// space is required: an id alone must not delete anything.
-	text, isErr := call(t, s.handleDelete, map[string]any{"id": e.EntryID})
+	text, isErr := call(t, s.handleDelete, map[string]any{"id": e.ID})
 	if !isErr || !strings.Contains(text, "required") {
 		t.Errorf("missing space should be a tool error:\n%s", text)
 	}
 
 	// wrong space: refused, entry untouched.
-	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.EntryID, "space": "team"})
+	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.ID, "space": "team"})
 	if !isErr || !strings.Contains(text, "nothing was deleted") {
 		t.Errorf("cross-space delete should refuse, got isErr=%v:\n%s", isErr, text)
 	}
-	if live, err := s.st.GetEntry(e.EntryID); err != nil || live.Tombstone {
-		t.Fatalf("cross-space delete tombstoned the entry: %+v %v", live, err)
+	if _, err := s.lo.GetEntry(ctx, e.ID); err != nil {
+		t.Fatalf("cross-space delete tombstoned the entry: %v", err)
 	}
 
 	// unknown id, and unknown space.
 	if _, isErr := call(t, s.handleDelete, map[string]any{"id": "no-such-id", "space": "personal"}); !isErr {
 		t.Error("unknown id should be a tool error")
 	}
-	if _, isErr := call(t, s.handleDelete, map[string]any{"id": e.EntryID, "space": "nope"}); !isErr {
+	if _, isErr := call(t, s.handleDelete, map[string]any{"id": e.ID, "space": "nope"}); !isErr {
 		t.Error("unknown space should be a tool error")
 	}
 
 	// the real delete reports what it removed.
-	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.EntryID, "space": "personal"})
+	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.ID, "space": "personal"})
 	if isErr {
 		t.Fatalf("delete errored: %s", text)
 	}
-	for _, want := range []string{"deleted " + e.EntryID, `"Deploy procedure"`, `space "personal"`, "tombstone v2"} {
+	for _, want := range []string{"deleted " + e.ID, `"Deploy procedure"`, `space "personal"`, "tombstone v2"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("delete response missing %q:\n%s", want, text)
 		}
@@ -462,7 +489,7 @@ func TestDeleteToolScopingAndIdempotency(t *testing.T) {
 	if !strings.Contains(text, "no results") {
 		t.Errorf("deleted entry still in search:\n%s", text)
 	}
-	text, isErr = call(t, s.handleGet, map[string]any{"id": e.EntryID})
+	text, isErr = call(t, s.handleGet, map[string]any{"id": e.ID})
 	if !isErr {
 		t.Errorf("deleted entry still fetchable by id:\n%s", text)
 	}
@@ -471,26 +498,25 @@ func TestDeleteToolScopingAndIdempotency(t *testing.T) {
 		t.Errorf("deleted entry still in its domain:\n%s", text)
 	}
 
-	// second delete: safe no-op, and honest about it.
-	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.EntryID, "space": "personal"})
+	// second delete: safe no-op, and honest about it — still tombstone v2, so
+	// nothing was written the second time.
+	text, isErr = call(t, s.handleDelete, map[string]any{"id": e.ID, "space": "personal"})
 	if isErr || !strings.Contains(text, "already deleted") {
 		t.Errorf("second delete should be a no-op, got isErr=%v:\n%s", isErr, text)
 	}
-	if got, _ := s.st.GetEntry(e.EntryID); got.Version != 2 {
-		t.Errorf("second delete wrote a new version: v%d", got.Version)
+	if !strings.Contains(text, "tombstone v2") {
+		t.Errorf("second delete wrote a new version:\n%s", text)
 	}
-	_ = team
 }
 
 // ----------------------------------------------------------------------------
-// post-write side effects: daemon poke + distill re-render
+// post-write side effects: daemon poke + mirror re-render
 // ----------------------------------------------------------------------------
 
 func TestAfterWriteSideEffects(t *testing.T) {
 	chdirNonGit(t)
 	s := newTestServer(t)
-	personal, _ := s.st.PersonalSpace()
-	team := mkSpace(t, s, "team", "")
+	mkSpace(t, s, "team", "")
 
 	// fake daemon admin API
 	hits := make(chan string, 8)
@@ -503,18 +529,18 @@ func TestAfterWriteSideEffects(t *testing.T) {
 	defer ts.Close()
 	u, _ := url.Parse(ts.URL)
 	daemonJSON := `{"port":` + u.Port() + `,"token":"sekrit"}`
-	if err := os.WriteFile(filepath.Join(s.home, "daemon.json"), []byte(daemonJSON), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.lo.Home(), "daemon.json"), []byte(daemonJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	// scratch distill mirror, explicitly configured — never the real one
+	// scratch mirror dir, explicitly configured — never the real one
 	mirrorDir := t.TempDir()
 	cfg := `{"mirror_dir":` + string(mustJSON(t, mirrorDir)) + `}`
-	if err := os.WriteFile(filepath.Join(s.home, "config.json"), []byte(cfg), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.lo.Home(), "config.json"), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	// personal write: pokes daemon AND renders distill
+	// personal write: pokes daemon AND renders the mirror
 	text, isErr := call(t, s.handlePut, map[string]any{
 		"title": "Canary rule", "body": "Deploys go through canary first.", "domain": "ops/deploy"})
 	if isErr {
@@ -529,13 +555,13 @@ func TestAfterWriteSideEffects(t *testing.T) {
 		t.Error("daemon was not poked after personal write")
 	}
 	if _, err := os.Stat(filepath.Join(mirrorDir, "SPINE.md")); err != nil {
-		t.Errorf("distill mirror not rendered after personal write: %v", err)
+		t.Errorf("mirror not rendered after personal write: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(mirrorDir, "ops", "deploy.md")); err != nil {
-		t.Errorf("distill mirror missing domain file: %v", err)
+		t.Errorf("mirror missing domain file: %v", err)
 	}
 
-	// shared-space write: pokes daemon but does NOT re-render distill
+	// shared-space write: pokes daemon but does NOT re-render the mirror
 	before := mtimeOf(t, filepath.Join(mirrorDir, "SPINE.md"))
 	text, isErr = call(t, s.handlePut, map[string]any{
 		"title": "Team fact", "body": "blue-green", "domain": "ops/deploy", "space": "team"})
@@ -548,10 +574,8 @@ func TestAfterWriteSideEffects(t *testing.T) {
 		t.Error("daemon was not poked after shared write")
 	}
 	if after := mtimeOf(t, filepath.Join(mirrorDir, "SPINE.md")); !after.Equal(before) {
-		t.Error("distill mirror re-rendered for a non-personal write")
+		t.Error("mirror re-rendered for a non-personal write")
 	}
-	_ = personal
-	_ = team
 }
 
 func mustJSON(t *testing.T, s string) []byte {

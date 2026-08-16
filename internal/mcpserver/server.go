@@ -1,24 +1,29 @@
-// Package mcpserver is lore's stdio MCP server: six tools over the local
-// SQLite store, zero resources, zero prompts, zero per-turn injection.
-// Contract: docs/IMPLEMENTATION.md (MCP section). It opens the store
-// directly (WAL makes multi-process access safe); after writes it pokes the
-// daemon's admin API if one is running and re-renders the distill mirror
-// when the personal space changed.
+// Package mcpserver is lore's stdio MCP server: six tools over a lore store,
+// zero resources, zero prompts, zero per-turn injection.
+// Contract: docs/IMPLEMENTATION.md (MCP section).
+//
+// It is written against lore's PUBLIC package and nothing else — no
+// internal/store, no internal/keys, no internal/distill. That is deliberate
+// and load-bearing: `lore mcp` is the proof that the public API is complete
+// enough to build a lore client on. If a tool here needs something the public
+// package cannot give it, the public package is the thing that is wrong.
+//
+// The only internal package it does use is internal/space, for the pure
+// capture-routing functions (subject routing, git project refs) that are a
+// client's business rather than the store's.
 package mcpserver
 
 import (
 	"fmt"
-	"path/filepath"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/BlueHeisenberg/lore/internal/keys"
-	"github.com/BlueHeisenberg/lore/internal/store"
+	"github.com/BlueHeisenberg/lore"
 )
 
 // version reported in the MCP initialize handshake.
-const version = "0.2.0"
+const version = "0.3.0"
 
 // ServerInstructions is published to the client at initialize. Kept ≤6
 // lines per contract: knowledge store, search before assuming, writes land
@@ -28,43 +33,25 @@ Search before assuming: call lore_search early when a task touches prior work, c
 lore_put stores new learnings; unless told otherwise they land in the personal space with confidence "provisional".
 Nothing is injected into your context per turn — knowledge reaches you only through these tool calls.`
 
-// Server holds the open store and the LORE_HOME it came from.
+// Server holds the open store.
 type Server struct {
-	home string
-	st   *store.Store
+	lo *lore.Store
 }
 
-// Open loads the account and device keys under home (LORE_HOME), verifies
-// the device certificate, and opens the store with a signer.
+// Open opens the lore store under home (LORE_HOME) with the device identity
+// that signs writes. NotifyOnWrite is on: `lore mcp` is the interactive
+// writer, so a write must poke the sync daemon and refresh the markdown
+// mirror rather than waiting for the daemon's next poll.
 func Open(home string) (*Server, error) {
-	account, err := keys.LoadAccount(home)
+	st, err := lore.Open(lore.Options{Home: home, NotifyOnWrite: true})
 	if err != nil {
-		return nil, fmt.Errorf("load account (run `lore init` first?): %w", err)
+		return nil, fmt.Errorf("open lore at %s: %w", home, err)
 	}
-	device, err := keys.LoadDevice(home)
-	if err != nil {
-		return nil, err
-	}
-	if err := device.Cert.VerifyForAccount(account.AccountID()); err != nil {
-		return nil, err
-	}
-	priv, err := device.PrivateKey()
-	if err != nil {
-		return nil, err
-	}
-	st, err := store.Open(filepath.Join(home, "lore.db"), &store.Signer{
-		AccountID:  account.AccountID(),
-		DeviceID:   device.DeviceID(),
-		DevicePriv: priv,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Server{home: home, st: st}, nil
+	return &Server{lo: st}, nil
 }
 
 // Close closes the underlying store.
-func (s *Server) Close() error { return s.st.Close() }
+func (s *Server) Close() error { return s.lo.Close() }
 
 // MCPServer builds the mark3labs MCP server with lore's six tools
 // registered. No resources, no prompts.
