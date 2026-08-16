@@ -25,11 +25,12 @@ const (
 	DeviceFile  = "device.json"
 )
 
-// timeFormat is RFC3339 with fixed-width nanoseconds (UTC), lexicographically sortable.
-const timeFormat = "2006-01-02T15:04:05.000000000Z07:00"
+// TimeFormat is RFC3339 with fixed-width nanoseconds (UTC), lexicographically
+// sortable — which is what lets a stored timestamp be compared as a string.
+const TimeFormat = "2006-01-02T15:04:05.000000000Z07:00"
 
 // Now returns the current UTC time in lore's canonical timestamp format.
-func Now() string { return time.Now().UTC().Format(timeFormat) }
+func Now() string { return time.Now().UTC().Format(TimeFormat) }
 
 // Account holds the two account keypairs. All key fields are hex.
 type Account struct {

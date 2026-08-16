@@ -57,6 +57,22 @@ func newTestServer(t *testing.T) *Server {
 // shares a home with a second open store.
 func createSpace(t *testing.T, home, kind, name, projectRef string) {
 	t.Helper()
+	withStore(t, home, func(st *store.Store) {
+		key, err := space.NewSpaceKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.CreateSpace(kind, name, projectRef, key); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// withStore opens the internal store on home for the things the public API
+// deliberately cannot do (create spaces, evolve member lists) and closes it
+// again straight away.
+func withStore(t *testing.T, home string, fn func(*store.Store)) {
+	t.Helper()
 	account, err := keys.LoadAccount(home)
 	if err != nil {
 		t.Fatal(err)
@@ -76,13 +92,7 @@ func createSpace(t *testing.T, home, kind, name, projectRef string) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	key, err := space.NewSpaceKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.CreateSpace(kind, name, projectRef, key); err != nil {
-		t.Fatal(err)
-	}
+	fn(st)
 }
 
 func mkSpace(t *testing.T, s *Server, name, projectRef string) lore.Space {
@@ -355,9 +365,14 @@ func TestSpacesList(t *testing.T) {
 	s := newTestServer(t)
 	personal, _ := s.lo.PersonalSpace(ctx)
 	team := mkSpace(t, s, "team", "")
+	mkSpace(t, s, "solo", "")
 	seed(t, s, personal.ID, "ops/a", "A", "body a", nil, "")
 	seed(t, s, team.ID, "ops/b", "B", "body b", nil, "")
 	seed(t, s, team.ID, "ops/c", "C", "body c", nil, "")
+	// "is this actually shared, or a lone copy?" is the one thing a consumer
+	// asks lore_spaces, so the count must come from the verified member list
+	// and not from a local assumption. team has one, solo does not.
+	installMemberList(t, s.lo.Home(), "team")
 
 	text, isErr := call(t, s.handleSpaces, nil)
 	if isErr {
@@ -365,12 +380,63 @@ func TestSpacesList(t *testing.T) {
 	}
 	for _, want := range []string{
 		"personal  kind:personal  members:1  entries:1",
-		"team  kind:shared  members:1  entries:2",
+		"team  kind:shared  members:2  entries:2",
+		"solo  kind:shared  members:1  entries:0",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("spaces output missing %q:\n%s", want, text)
 		}
 	}
+}
+
+// installMemberList gives a shared space a two-account member list built
+// through the real signing chain: v1 defines the owner, an owner-signed v2
+// admits a writer. A list that never went through the chain rule is not a
+// list, so nothing here is hand-written.
+func installMemberList(t *testing.T, home, spaceName string) {
+	t.Helper()
+	owner, err := keys.GenerateAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := keys.GenerateAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, err := owner.SigningKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withStore(t, home, func(st *store.Store) {
+		sp, err := st.SpaceByName(spaceName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		member := func(a *keys.Account, role string) space.Member {
+			wrapped, err := space.WrapSpaceKey(sp.SpaceKey, a.EncPub)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return space.Member{AccountPub: a.AccountID(), EncPub: a.EncPub,
+				Role: role, WrappedSpaceKey: wrapped}
+		}
+		v1, err := space.NewMemberDoc(sp.SpaceID, member(owner, space.RoleOwner), priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AddMemberDoc(sp.SpaceID, v1); err != nil {
+			t.Fatal(err)
+		}
+		v2, err := space.Evolve(v1, []space.Member{
+			member(owner, space.RoleOwner), member(guest, space.RoleWriter),
+		}, owner.AccountID(), priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.AddMemberDoc(sp.SpaceID, v2); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 // ----------------------------------------------------------------------------

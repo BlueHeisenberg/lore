@@ -290,6 +290,44 @@ func ListPeers(db *sql.DB) ([]Peer, error) {
 	return out, rows.Err()
 }
 
+// DeleteStalePeers forgets every DISCOVERED peer whose last_seen is older
+// than before (an RFC3339 keys.TimeFormat stamp — the format is
+// lexicographically sortable, which is what makes the string comparison
+// valid), and returns the device ids it removed.
+//
+// Static peers are never touched. The two kinds fail differently: a
+// discovered address is a fact mDNS asserted and will assert again when the
+// machine is back, so a stale one is garbage and dropping it costs nothing —
+// rediscovery re-verifies it from scratch. A static peer was typed by a
+// person and is not rediscoverable; forgetting it would silently undo their
+// configuration, so an unreachable one stays and keeps being reported.
+func DeleteStalePeers(db *sql.DB, before string) ([]string, error) {
+	rows, err := db.Query(`SELECT device_id FROM peers
+		WHERE static=0 AND (last_seen IS NULL OR last_seen < ?)`, before)
+	if err != nil {
+		return nil, err
+	}
+	var stale []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		stale = append(stale, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range stale {
+		if _, err := db.Exec(`DELETE FROM peers WHERE device_id=? AND static=0`, id); err != nil {
+			return nil, err
+		}
+	}
+	return stale, nil
+}
+
 // TouchPeer updates last_seen for a peer.
 func TouchPeer(db *sql.DB, deviceID, ts string) error {
 	_, err := db.Exec(`UPDATE peers SET last_seen=? WHERE device_id=?`, ts, deviceID)

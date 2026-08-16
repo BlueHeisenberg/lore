@@ -74,11 +74,19 @@ func (d *Daemon) startDiscovery(ctx context.Context) error {
 	return nil
 }
 
-// harvestDiscovered promotes mDNS registry entries to peers-table rows.
-// Peers we already know just get their address refreshed; unknown peers are
+// harvestDiscovered promotes mDNS registry entries to peers-table rows and
+// returns the set of device ids currently advertising themselves. Peers we
+// already know get their address and last_seen refreshed; unknown peers are
 // verified first via an mTLS hello (device cert chain -> account) so the
 // peers table only ever contains verified accounts.
-func (d *Daemon) harvestDiscovered(ctx context.Context) {
+//
+// Being advertised IS being seen, whether or not the subsequent sync
+// succeeds: that is what separates a peer that is present but failing (a
+// fault worth reporting) from an address nobody answers to any more (a dead
+// pod, to be forgotten). last_seen is therefore refreshed on every sighting,
+// not only when the address changed.
+func (d *Daemon) harvestDiscovered(ctx context.Context) map[string]bool {
+	advertised := map[string]bool{}
 	known := map[string]syncproto.Peer{}
 	if peers, err := syncproto.ListPeers(d.db); err == nil {
 		for _, p := range peers {
@@ -94,7 +102,8 @@ func (d *Daemon) harvestDiscovered(ctx context.Context) {
 			continue // enrollee or foreign advertisement
 		}
 		if kp, seen := known[dp.PeerID]; seen {
-			if !kp.Static && kp.Addr != dp.Addr {
+			advertised[dp.PeerID] = true
+			if !kp.Static {
 				kp.Addr = dp.Addr
 				kp.LastSeen = keys.Now()
 				_ = syncproto.UpsertPeer(d.db, kp)
@@ -111,6 +120,7 @@ func (d *Daemon) harvestDiscovered(ctx context.Context) {
 			d.opts.Logf("hello %s: device id mismatch", dp.Addr)
 			continue
 		}
+		advertised[hello.DeviceID] = true
 		_ = syncproto.UpsertPeer(d.db, syncproto.Peer{
 			DeviceID:   hello.DeviceID,
 			AccountPub: hello.DeviceCert.AccountPub,
@@ -120,4 +130,5 @@ func (d *Daemon) harvestDiscovered(ctx context.Context) {
 			LastSeen:   keys.Now(),
 		})
 	}
+	return advertised
 }

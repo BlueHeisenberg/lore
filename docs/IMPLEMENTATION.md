@@ -197,6 +197,37 @@ POST /lore/v1/invite                     LAN invite handshake (code-gated, finge
 
 Receive path (both sync and relay apply): verify entry signature → verify author is member with write role (against latest verified member_doc) → LWW apply → bump sync_state. Personal-space sync additionally requires peer account == own account.
 
+### Peer lifecycle — discovered peers expire, static peers do not
+
+The two kinds of `peers` row fail differently and must be treated differently.
+
+- **Discovered** (`static=0`): mDNS asserted this address and will assert it again when the machine is back. `last_seen` is refreshed on **every sighting in the mDNS registry**, not only when the address changed — being advertised is being seen, whether or not the sync that followed succeeded. A row not seen for `Options.PeerTTL` (default **1h**) is deleted. Forgetting costs nothing: rediscovery re-verifies the device cert chain from scratch.
+- **Static** (`static=1`): a person typed it and nothing will rediscover it. Never expired.
+
+Why it matters: on a container host a pod's address (and, on an ephemeral home, its device id) changes on every recreation, so without expiry a rolling update leaves the replaced pod in the table forever. Two consequences, both fixed here — the table grew without bound, and `/admin/status` reported every dead address as a sync error on every round until a real failure was invisible in the noise.
+
+**A failed round is only a reported error when the peer is static or currently advertised.** A discovered peer that is no longer advertising is a dead address, not a fault; it is still attempted (mDNS may be off, or it may be reachable anyway) and it is still logged, but it does not reach `sync_errors`. `PeerTTL` is a knob because the right value is a property of the deployment: an hour is generous for a pod, and a household of machines that are usually off may want longer.
+
+### Loopback admin API (`internal/daemon/admin.go`)
+
+`daemon.json` (0600) publishes `{port, token, sync_port, device_id, pid}`. Two routes, both token-gated on 127.0.0.1:
+
+```
+POST /admin/sync      run one round now, block until it finishes
+GET  /admin/status    {device_id, account_id, name, sync_port, last_sync,
+                       sync_errors[], peers[], spaces[]}
+                      peers[]:  the peers row (device_id, account_pub, name, addr,
+                                static, last_seen) + shared_spaces[]
+                      spaces[]: {space_id, kind, name, entries, members}
+```
+
+- `spaces[].members` is the size of the latest **verified** member list, or `0` when the space has none — the personal space always (membership there is between devices of one account, gated on the account key), a shared space until its first member doc arrives. `0` means "no member list", never "no members", and it is never a local guess. (`lore_spaces` over MCP reports `1` in the same situation instead, because its reader is a model being told how many accounts it can see, not a machine distinguishing absent from empty.)
+- `peers[].shared_spaces` are the **local** space ids the last blinded intersection with that peer returned, sorted. Empty means "not established": no round has succeeded with that peer since the daemon started (there is no history across restarts), or the two genuinely share nothing. `last_seen` says how old the answer is. Together with `members`, this is what lets a consumer say "3 instances, 2 of them in this space" rather than only "reaches 3 instances".
+
+**Disclosure.** To a process that reached loopback *and* read the token out of `daemon.json` — which is a process that can already open `lore.db` and therefore holds every space key, every entry and the device private key. Nothing on this endpoint is a new capability; it is a convenience over facts that caller could compute itself.
+
+It does not weaken the blinded intersection. `POST /lore/v1/spaces` only ever answers an offer with a **subset of it**, so a device never learns of a space a peer holds and it does not — `shared_spaces` is structurally incapable of naming one. Blinded ids are translated back to local ids before publishing precisely because blinding is a *wire* encoding (keep the id off the network) and a loopback caller is not the network; publishing the blinded form instead would disclose exactly as much while being unusable to a consumer, since the public API deliberately exposes no space key to unblind with. No space key, wrapped key, member wrapping or entry body appears in the response.
+
 ## Space crypto (internal/space + vault)
 
 - space_key: 32 random bytes per space (personal included — uniform relay path).
@@ -310,5 +341,5 @@ Server instructions ≤ 6 lines. No resources, no prompts, zero per-turn injecti
 - Unit tests per package (store CRUD+FTS+LWW, keys roundtrip, canonical signing, distill roundtrip, space crypto wrap/unwrap, routing rules, blinding), plus the public API against a real store in `t.TempDir()`.
 - **No test doubles for the store.** Tests use a real store in a temp dir, never a fake: this project has repeatedly been bitten by doubles that could not fail the way the real dependency fails. A new assertion is not done until it has been shown to fail with the code reverted.
 - Nothing may touch the real `~/.lore` or the real mirror directory. Every test points `LORE_HOME`/`Options.Home` at `t.TempDir()`.
-- Integration (in-repo, `go test ./test/...`): two LORE_HOMEs sync over localhost daemons (static peer, no mDNS dependency in CI); shared-space flow (invite→join→sync→isolation check); relay e2e (start relay on :0, two homes, login-from-scratch restore).
+- Integration (in-repo, `go test ./test/...`): two LORE_HOMEs sync over localhost daemons (static peer, no mDNS dependency in CI); shared-space flow (invite→join→sync→isolation check); relay e2e (start relay on :0, two homes, login-from-scratch restore); peer lifecycle (a stale discovered row is forgotten and is not reported, a fresh one and a static one survive, the static one's failure still reports) and `/admin/status` membership + observed shared spaces.
 - E2E harness test: register MCP in a scratch Claude Code config, `claude -p` with prompts exercising lore_search/lore_put, assert on DB rows. Windows host runs the binary natively; WSL used for a "second machine" daemon when useful.

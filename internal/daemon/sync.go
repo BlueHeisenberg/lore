@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/BlueHeisenberg/lore/internal/keys"
@@ -50,10 +51,11 @@ func (d *Daemon) doJSON(ctx context.Context, peerDeviceID, method, url string, r
 }
 
 // syncRound harvests discovered peers, then runs a spaces-intersection +
-// per-space vv exchange (pull) + push against every known peer.
+// per-space vv exchange (pull) + push against every known peer, and finally
+// forgets the discovered peers that have gone quiet.
 func (d *Daemon) syncRound(ctx context.Context) {
 	var errs []string
-	d.harvestDiscovered(ctx)
+	advertised := d.harvestDiscovered(ctx)
 
 	peers, err := syncproto.ListPeers(d.db)
 	if err != nil {
@@ -68,11 +70,45 @@ func (d *Daemon) syncRound(ctx context.Context) {
 			return
 		}
 		if err := d.syncPeer(ctx, p); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", shortID(p.DeviceID), err))
 			d.opts.Logf("sync %s (%s): %v", shortID(p.DeviceID), p.Addr, err)
+			// Not every failure is a fault. A discovered peer that is no
+			// longer advertising itself is an address whose machine is gone —
+			// on a container host that is every replaced pod, and reporting
+			// each one every round is what buries the failure an operator
+			// needed to see. It is still attempted (mDNS may be off, or the
+			// peer reachable anyway) and it will be forgotten by
+			// expireDiscovered; it is just not called an error. A static peer
+			// is always reported: a person configured it, so its silence is
+			// news.
+			if p.Static || advertised[p.DeviceID] {
+				errs = append(errs, fmt.Sprintf("%s: %v", shortID(p.DeviceID), err))
+			}
 		}
 	}
+	d.expireDiscovered()
 	d.setLastSync(errs)
+}
+
+// expireDiscovered drops mDNS-discovered peers not seen — neither advertised
+// nor successfully synced — for PeerTTL, and forgets what they shared.
+func (d *Daemon) expireDiscovered() {
+	cutoff := time.Now().UTC().Add(-d.opts.PeerTTL).Format(keys.TimeFormat)
+	gone, err := syncproto.DeleteStalePeers(d.db, cutoff)
+	if err != nil {
+		d.opts.Logf("expire peers: %v", err)
+		return
+	}
+	if len(gone) == 0 {
+		return
+	}
+	d.mu.Lock()
+	for _, id := range gone {
+		delete(d.common, id)
+	}
+	d.mu.Unlock()
+	for _, id := range gone {
+		d.opts.Logf("forgot discovered peer %s: not seen for %s", shortID(id), d.opts.PeerTTL)
+	}
 }
 
 func shortID(id string) string {
@@ -105,6 +141,7 @@ func (d *Daemon) syncPeer(ctx context.Context, p syncproto.Peer) error {
 		syncproto.SpacesRequest{Blinded: offer}, &common); err != nil {
 		return err
 	}
+	d.recordCommon(p.DeviceID, common.Blinded, mine)
 
 	personalTouched := false
 	for _, blinded := range common.Blinded {
@@ -125,6 +162,32 @@ func (d *Daemon) syncPeer(ctx context.Context, p syncproto.Peer) error {
 		d.renderDistill()
 	}
 	return nil
+}
+
+// recordCommon remembers which of our spaces a peer turned out to hold, for
+// GET /admin/status. It is recorded straight off the intersection response,
+// before any per-space sync runs: "we both hold this space" is true whether
+// or not the transfer that followed worked.
+//
+// The intersection can only ever name spaces WE hold — the peer answers our
+// offer with a subset of it — so recording it discloses nothing we did not
+// already have. Blinded ids are translated back to local space ids here: the
+// blinded form is a wire encoding whose only purpose is to keep the id off
+// the network, and a caller of the loopback admin API is not the network.
+func (d *Daemon) recordCommon(deviceID string, blinded []string, mine map[string]store.Space) {
+	ids := make([]string, 0, len(blinded))
+	for _, b := range blinded {
+		if sp, ok := mine[b]; ok {
+			ids = append(ids, sp.SpaceID)
+		}
+	}
+	sort.Strings(ids)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.common == nil {
+		d.common = map[string][]string{}
+	}
+	d.common[deviceID] = ids
 }
 
 // syncSpace does one pull+push cycle for a single common space. Returns how

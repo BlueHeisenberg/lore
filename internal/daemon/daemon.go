@@ -36,7 +36,20 @@ type Options struct {
 	AdminPort    int           // admin API port on 127.0.0.1 (0 = ephemeral)
 	SyncPort     int           // fixed mTLS sync port (0 = ephemeral); required for static peers across VPNs like Tailscale, where the address must survive restarts
 	SyncInterval time.Duration // default 30s
-	Logf         func(format string, args ...any)
+
+	// PeerTTL is how long a peer discovered over mDNS survives without being
+	// seen — neither advertising itself nor answering a sync — before the
+	// daemon forgets it. Default 1h. Static peers are never expired.
+	//
+	// It is a knob because the right value is a property of the deployment,
+	// not of lore: on a container host a replaced pod's address is dead the
+	// moment it stops advertising and an hour is generous, while a household
+	// of machines that are usually off wants long enough that a laptop
+	// shutting for the night is not treated as a departure. Forgetting is
+	// cheap either way — mDNS rediscovers and re-verifies from scratch.
+	PeerTTL time.Duration
+
+	Logf func(format string, args ...any)
 }
 
 // Daemon is the running sync engine. Create with New, then Start; Stop
@@ -71,6 +84,7 @@ type Daemon struct {
 	mu       sync.Mutex
 	lastSync time.Time
 	lastErrs []string
+	common   map[string][]string // peer device id -> local space ids last seen in common
 }
 
 // New loads identity and store from home and prepares (but does not start)
@@ -78,6 +92,9 @@ type Daemon struct {
 func New(home string, opts Options) (*Daemon, error) {
 	if opts.SyncInterval <= 0 {
 		opts.SyncInterval = 30 * time.Second
+	}
+	if opts.PeerTTL <= 0 {
+		opts.PeerTTL = time.Hour
 	}
 	if opts.Logf == nil {
 		opts.Logf = func(string, ...any) {}
@@ -129,6 +146,7 @@ func New(home string, opts Options) (*Daemon, error) {
 		reg:       discovery.NewRegistry(device.DeviceID()),
 		poke:      make(chan chan struct{}, 8),
 		mirrorDir: explicitMirrorDir(home),
+		common:    map[string][]string{},
 	}
 	return d, nil
 }
