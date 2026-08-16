@@ -1,0 +1,7 @@
+# Go files check out with LF everywhere, whatever core.autocrlf says locally.
+# Without this, a Windows checkout gets CRLF and `gofmt -l .` reports every
+# file in the repository as unformatted — which makes the gate useless exactly
+# where it is most needed.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
