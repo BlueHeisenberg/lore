@@ -268,7 +268,7 @@ discipline cannot: it is a compile error to publish `Space.SpaceKey` (a raw
 `OriginDevice`. Re-exporting the internal structs would have made every one of
 those a promise.
 
-**Surface** (21 methods, 5 package functions):
+**Surface** (22 methods, 5 package functions):
 
 ```
 Open(Options) (*Store, error) · Init(home, deviceName string) (Identity, error)
@@ -278,6 +278,8 @@ DefaultHome() · NormalizeMarkers([]string) · Terms(string)
 entries  PutEntry · GetEntry · GetEntryIn · DeleteEntry · ListEntries · CountEntries · GetDomain · CopyEntry
 search   Search
 spaces   CreateSpace · Spaces · GetSpace · SpaceByName · PersonalSpace · Members · CanWrite · Links
+sync     Serve(ctx, ServeOptions) — blocks until ctx is cancelled; reports readiness
+         and its ephemeral ports through ServeOptions.Ready(ServeInfo)
 ```
 
 **Decisions worth their line:**
@@ -335,10 +337,46 @@ spaces   CreateSpace · Spaces · GetSpace · SpaceByName · PersonalSpace · Me
   `CreateSpace` takes a name and a kind and guesses neither, there is no
   get-or-create, a duplicate name is `ErrSpaceExists` rather than a silent
   second space, and the personal space belongs to `Init` because there is one.
+- **`Serve` runs the sync daemon in the caller's process, on the caller's
+  store.** Nothing else carries an entry from one home to another: a write is
+  local, `NotifyOnWrite` only pokes a daemon that already exists, and until
+  this export the only daemon was the `lore` binary. An embedder that had to
+  install and supervise that binary to make two of its own homes converge was
+  not embedding lore. It blocks until `ctx` is cancelled and returns `nil`
+  when it shut down cleanly, so a supervisor can treat any non-nil return as a
+  real failure to serve; per-peer and per-round failures are not fatal and
+  reach `ServeOptions.Logf` and `/admin/status` instead. `ServeOptions.Ready`
+  exists because the ports are ephemeral and a blocking call has nowhere else
+  to report them.
+- **One daemon, two constructors, one owner question.** `internal/daemon` is
+  the only sync daemon in the module: `lore serve` builds it with
+  `daemon.New`, which opens its own store and closes it again, and `Serve`
+  builds it with `daemon.NewWithStore`, which runs on the store the caller
+  opened and leaves it open. That is the entire seam. It also keeps the
+  connection count where it was — the daemon's own `syncproto` connection plus
+  one store — rather than adding a third to a home that already has an
+  embedder's `Store` on it. The CLI was deliberately **not** rewritten onto
+  `Serve`: it is the older and more used surface, and routing it through
+  `lore.Open` would have changed the message `lore serve` prints on a home
+  with no account. `cmd/lore/serve_test.go` guards the other direction — the
+  CLI must not grow a daemon of its own — and `test/serve` syncs the two
+  constructors against each other so neither can drift.
+- **Two daemons on one home are allowed and untidy.** A consumer cannot stop a
+  person running `lore serve` against the home it is already serving, so
+  `Serve` documents the outcome rather than pretending to prevent it (it could
+  not tell a live daemon from a stale `daemon.json` without racing). It is not
+  a data hazard — one WAL, one busy retry, the same signed LWW entries — but
+  the two bind different ports while advertising one device id, so a peer's
+  recorded address flaps; the second to start owns `daemon.json`, so write
+  pokes go only to it; and the first to stop removes `daemon.json`, after
+  which pokes reach nobody and the survivor syncs on its interval alone.
+  `TestTwoDaemonsOnOneHome` is that paragraph, executable.
 - **Absent on purpose**: device enrolment, invites and join, backup/restore,
-  sync, membership mutation (`Evolve`), pinning, `project_ref` (resolving one
+  membership mutation (`Evolve`), pinning, `project_ref` (resolving one
   reads `os.Getwd` and a git config), key material, the schema, `*sql.DB`,
-  signing, capture routing and scope resolution.
+  signing, capture routing and scope resolution. Sync is now present as
+  `Serve`; what stays absent is everything that gives two homes a space to
+  sync in the first place, which is a person's decision at a CLI.
 - **Errors**: `ErrNotFound`, `ErrSpaceNotFound`, `ErrWrongSpace`, `ErrNotWriter`,
   `ErrUserModel`, `ErrInvalidArgument`, `ErrReadOnly`, `ErrClosed`,
   `ErrNoAccount`, `ErrAlreadyInitialised`, `ErrSpaceExists`, `ErrSchemaTooNew`,
@@ -359,7 +397,9 @@ because `Init` mints the code as part of creating the account.
 
 The rest of `cmd/lore` stays on `internal/` — `join`, `enroll`, `backup`,
 `serve`, `project init` (it needs `project_ref`) and `space pin` need keys,
-member docs, the git remote or the daemon. `project init` reaches the same
+member docs, the git remote or the daemon. `serve` stays there by choice
+rather than by need, and the choice is above: its behaviour is a released
+product's and is worth more than the symmetry. `project init` reaches the same
 creation through `store.CreateSharedSpace`, which is the single implementation
 the public API, the CLI and the integration tests all call.
 

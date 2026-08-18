@@ -45,7 +45,15 @@ func (d *Daemon) startAdmin() error {
 	mux.HandleFunc("POST /admin/sync", d.withToken(d.handleAdminSync))
 	mux.HandleFunc("GET /admin/status", d.withToken(d.handleAdminStatus))
 	d.admin = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() { _ = d.admin.Serve(lis) }()
+	// Tracked by the WaitGroup so Stop returns with this goroutine already
+	// gone rather than a moment before it: in a process that embeds lore,
+	// "Stop returned" has to mean the daemon is off the goroutine list, or a
+	// caller that starts and stops daemons cannot tell a straggler from a leak.
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		_ = d.admin.Serve(lis)
+	}()
 	return nil
 }
 
