@@ -7,6 +7,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
@@ -81,6 +82,10 @@ type Daemon struct {
 	renderMu  sync.Mutex
 	relay     *RelayRunner
 
+	// ownStore says Stop must close st. True for New, which opened it;
+	// false for NewWithStore, whose caller did and keeps using it.
+	ownStore bool
+
 	mu       sync.Mutex
 	lastSync time.Time
 	lastErrs []string
@@ -88,29 +93,9 @@ type Daemon struct {
 }
 
 // New loads identity and store from home and prepares (but does not start)
-// the daemon.
+// the daemon. Stop closes the store it opened.
 func New(home string, opts Options) (*Daemon, error) {
-	if opts.SyncInterval <= 0 {
-		opts.SyncInterval = 30 * time.Second
-	}
-	if opts.PeerTTL <= 0 {
-		opts.PeerTTL = time.Hour
-	}
-	if opts.Logf == nil {
-		opts.Logf = func(string, ...any) {}
-	}
-	account, err := keys.LoadAccount(home)
-	if err != nil {
-		return nil, err
-	}
-	device, err := keys.LoadDevice(home)
-	if err != nil {
-		return nil, err
-	}
-	if err := device.Cert.VerifyForAccount(account.AccountID()); err != nil {
-		return nil, err
-	}
-	priv, err := device.PrivateKey()
+	account, device, priv, err := loadIdentity(home)
 	if err != nil {
 		return nil, err
 	}
@@ -122,14 +107,72 @@ func New(home string, opts Options) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := syncproto.OpenDB(filepath.Join(home, "lore.db"))
+	d, err := newDaemon(home, st, account, device, priv, opts)
 	if err != nil {
 		st.Close()
 		return nil, err
 	}
+	d.ownStore = true
+	return d, nil
+}
+
+// NewWithStore prepares a daemon on a store the caller already opened on
+// home, and leaves that store open when it stops: the caller owns it.
+//
+// It exists so an embedder runs the daemon on the same store handle it reads
+// and writes through, rather than a second one on the same lore.db. The
+// identity is still loaded from home — the daemon signs with the device key
+// and serves mTLS with a certificate derived from it, and a store handle
+// carries neither.
+func NewWithStore(home string, st *store.Store, opts Options) (*Daemon, error) {
+	account, device, priv, err := loadIdentity(home)
+	if err != nil {
+		return nil, err
+	}
+	return newDaemon(home, st, account, device, priv, opts)
+}
+
+// loadIdentity loads the account and device keys under home and checks that
+// the device certificate chains to the account.
+func loadIdentity(home string) (*keys.Account, *keys.Device, ed25519.PrivateKey, error) {
+	account, err := keys.LoadAccount(home)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	device, err := keys.LoadDevice(home)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := device.Cert.VerifyForAccount(account.AccountID()); err != nil {
+		return nil, nil, nil, err
+	}
+	priv, err := device.PrivateKey()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return account, device, priv, nil
+}
+
+// newDaemon wires a daemon around an open store. It opens the second
+// connection sync bookkeeping needs and closes it again on any later failure;
+// what it never touches is st, whose ownership is the caller's business.
+func newDaemon(home string, st *store.Store, account *keys.Account, device *keys.Device,
+	priv ed25519.PrivateKey, opts Options) (*Daemon, error) {
+	if opts.SyncInterval <= 0 {
+		opts.SyncInterval = 30 * time.Second
+	}
+	if opts.PeerTTL <= 0 {
+		opts.PeerTTL = time.Hour
+	}
+	if opts.Logf == nil {
+		opts.Logf = func(string, ...any) {}
+	}
+	db, err := syncproto.OpenDB(filepath.Join(home, "lore.db"))
+	if err != nil {
+		return nil, err
+	}
 	cert, err := identity.FromPrivateKey(priv).TLSCertificate()
 	if err != nil {
-		st.Close()
 		db.Close()
 		return nil, err
 	}
@@ -255,7 +298,9 @@ func (d *Daemon) SyncNow(ctx context.Context) {
 	}
 }
 
-// Stop shuts down listeners and loops, removes daemon.json and closes the DB.
+// Stop shuts down listeners and loops, removes daemon.json and closes the
+// sync connection. The knowledge store is closed only when this daemon opened
+// it (New); a store handed to NewWithStore is left open for its owner.
 func (d *Daemon) Stop(ctx context.Context) {
 	if d.cancel != nil {
 		d.cancel()
@@ -273,7 +318,9 @@ func (d *Daemon) Stop(ctx context.Context) {
 	d.wg.Wait()
 	_ = os.Remove(filepath.Join(d.home, "daemon.json"))
 	_ = d.db.Close()
-	_ = d.st.Close()
+	if d.ownStore {
+		_ = d.st.Close()
+	}
 }
 
 func (d *Daemon) shutdownServers(ctx context.Context) {

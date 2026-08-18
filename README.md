@@ -48,10 +48,19 @@ defer st.Close()
 
 sp, err := st.CreateSpace(ctx, "household", lore.Shared) // returns the id
 hits, err := st.Search(ctx, "canary deploy", lore.SearchOpts{Spaces: []string{sp.ID}})
+
+// Sync with the other homes that hold this space, in this process. Blocks
+// until ctx is cancelled; no `lore` binary involved.
+go func() {
+    if err := st.Serve(ctx, lore.ServeOptions{LAN: true, Logf: log.Printf}); err != nil {
+        log.Printf("lore sync: %v", err)
+    }
+}()
 ```
 
 The root package is the compatibility promise: making a home, spaces, entries, full-text
-search, and the signed, syncing writes behind them. A search hit is a **whole entry**, with the highlighted
+search, the signed, syncing writes behind them, and the sync daemon that carries them
+between homes. A search hit is a **whole entry**, with the highlighted
 snippet alongside it. Everything under `internal/` — sync, signing, membership, the relay,
 the schema — is explicitly not promised and gains no exported accessor; there is no way to
 reach the database, a space key, or the signing encoding.

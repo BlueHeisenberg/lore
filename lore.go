@@ -13,9 +13,17 @@
 // to mutate a member list — each of those would freeze an internal format
 // into a public contract.
 //
-// Init and CreateSpace are here; device enrolment, invites and join,
-// backup and restore, sync and membership mutation are not, and an embedder
-// still reaches those by running the CLI.
+// Init, CreateSpace and Serve are here; device enrolment, invites and join,
+// backup and restore, and membership mutation are not, and an embedder still
+// reaches those by running the CLI.
+//
+// Serve is the sync daemon, in this process. It is here for the same reason
+// the other two are: an embedder that had to run the `lore` binary to move an
+// entry between two homes was not embedding lore, it was supervising it. What
+// it does not bring with it is the enrolment and invite handshakes that give
+// two homes a space to sync in the first place — those still belong to a
+// person at a CLI, and Serve only carries what such a person already agreed
+// to share.
 //
 // This package used to say space creation was deliberately absent, on the
 // argument that a space is made out of band by a person who chose a name and
