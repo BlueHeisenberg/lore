@@ -73,6 +73,19 @@ var (
 	// success, not this error.
 	ErrSpaceExists = errors.New("lore: a space with that name already exists")
 
+	// ErrNotOwner: GrantMembership was called on a space this store's account
+	// does not own per its latest verified member list. Only an owner can sign
+	// the next version, so only an owner can admit anybody. Nothing was
+	// written.
+	ErrNotOwner = errors.New("lore: not an owner of the space")
+
+	// ErrNotGranted: AcceptMembership was given a grant that is not this
+	// store's to apply — it does not open with this account's encryption key,
+	// its member-doc chain does not verify, or the chain does not name this
+	// account. It is the refusal that makes a grant useless to anyone but its
+	// addressee. Nothing was written.
+	ErrNotGranted = errors.New("lore: the grant is not addressed to this store")
+
 	// ErrSchemaTooNew: the database was written by a newer lore than this
 	// build. Open-time only, and it refuses rather than proceeding: an older
 	// build silently reading a newer schema's columns corrupts. See the
