@@ -54,6 +54,14 @@ sp, err := st.CreateSpace(ctx, "household", lore.Shared) // returns the id
 sp, err = st.CreateSpaceWithID(ctx, cfg.SpaceID, "household", lore.Shared)
 hits, err := st.Search(ctx, "canary deploy", lore.SearchOpts{Spaces: []string{sp.ID}})
 
+// Admit a second store this process also provisioned into that space. The
+// owner's half and the grantee's half are separate calls on separate homes,
+// and neither can be used without holding the home it runs on. Both are
+// idempotent.
+id, err := memberStore.PublicIdentity()
+grant, err := st.GrantMembership(ctx, sp.ID, id, lore.Writer)
+_, err = memberStore.AcceptMembership(ctx, grant)
+
 // Sync with the other homes that hold this space, in this process. Blocks
 // until ctx is cancelled; no `lore` binary involved.
 go func() {
@@ -64,8 +72,8 @@ go func() {
 ```
 
 The root package is the compatibility promise: making a home, spaces, entries, full-text
-search, the signed, syncing writes behind them, and the sync daemon that carries them
-between homes. A search hit is a **whole entry**, with the highlighted
+search, the signed, syncing writes behind them, the sync daemon that carries them
+between homes, and admitting a second store you also own into a space you own. A search hit is a **whole entry**, with the highlighted
 snippet alongside it. Everything under `internal/` — sync, signing, membership, the relay,
 the schema — is explicitly not promised and gains no exported accessor; there is no way to
 reach the database, a space key, or the signing encoding.
@@ -84,7 +92,7 @@ One **account keypair** per user (Ed25519). Each device holds a **device key** s
 
 Built and validated locally end to end: local core, MCP server, sync daemon with LAN discovery and device enrolment, shared spaces with signed member documents, LAN and token invites, encrypted backup/restore, and the relay server. Not yet packaged for installation — no release binaries, no CI.
 
-Known gaps: relay invites by handle are not built (invites are LAN or bearer token); removing a member means rotating the space key by hand; member documents do not carry device certificates.
+Known gaps: relay invites by handle are not built (invites are LAN or bearer token); removing a member means rotating the space key by hand, and `GrantMembership` deliberately has no opposite for the same reason; member documents do not carry device certificates.
 
 Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · knowledge-capture model: [docs/DISTILL.md](docs/DISTILL.md) · relay: [docs/RELAY.md](docs/RELAY.md) · the binding implementation contract: [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
 

@@ -268,7 +268,7 @@ discipline cannot: it is a compile error to publish `Space.SpaceKey` (a raw
 `OriginDevice`. Re-exporting the internal structs would have made every one of
 those a promise.
 
-**Surface** (23 methods, 5 package functions):
+**Surface** (26 methods, 5 package functions):
 
 ```
 Open(Options) (*Store, error) · Init(home, deviceName string) (Identity, error)
@@ -279,6 +279,8 @@ entries  PutEntry · GetEntry · GetEntryIn · DeleteEntry · ListEntries · Cou
 search   Search
 spaces   CreateSpace · CreateSpaceWithID · Spaces · GetSpace · SpaceByName · PersonalSpace
          Members · CanWrite · Links
+grants   PublicIdentity · GrantMembership(ctx, spaceID, PublicIdentity, Role) ([]byte, error)
+         AcceptMembership(ctx, grant []byte) (Space, error)
 sync     Serve(ctx, ServeOptions) — blocks until ctx is cancelled; reports readiness
          and its ephemeral ports through ServeOptions.Ready(ServeInfo)
 ```
@@ -351,6 +353,39 @@ sync     Serve(ctx, ServeOptions) — blocks until ctx is cancelled; reports rea
   author and is not a substitute for the shared one that was asked for. The id
   must be canonical UUID text and is refused, never coerced — a primary key
   with two spellings is two rows.
+- **`GrantMembership` / `AcceptMembership` admit one store into another
+  store's space, without a person at either end.** The package used to expose
+  no membership mutation at all, and the reason was right for the case it was
+  written about: a space arrives in somebody's store because two people agreed
+  to share, and `lore space invite` / `lore join` — a code read aloud, a
+  fingerprint confirmed on both screens — is that agreement. What changed is
+  the same premise `CreateSpace`'s did, who the person is. An embedder that
+  provisioned BOTH stores, holds both homes and was told by an administrator to
+  add a member is carrying out a decision already taken, not taking one; making
+  it drive a code and a y/N prompt through two containers bought a subprocess,
+  not deliberation.
+
+  The two calls only compose in one direction, and that is the whole safety
+  argument. `GrantMembership` runs on the owner's own home, needs its account
+  signing key, and is `ErrNotOwner` unless that account owns the space in its
+  latest verified member list. `AcceptMembership` runs on the grantee's own
+  home, needs its account encryption key, and is `ErrNotGranted` unless the
+  blob opens with it AND the verified chain inside names it. Neither reaches a
+  second store or opens a socket. There is no pair of calls that joins an
+  arbitrary space to an arbitrary account: to grant you must hold the owner's
+  home, to accept you must hold the grantee's, and a caller holding both could
+  read both stores anyway. `PublicIdentity` is the third piece and carries only
+  what a sync hello already puts on the wire — account id, encryption key, and
+  the signature binding them.
+
+  Both are idempotent, which is what makes them usable from a supervisor that
+  cannot know whether this is a first boot: re-granting an account already in
+  the list re-seals the current chain and writes no new version, and re-applying
+  a grant rewrites the same rows. `Owner` is not grantable and the personal
+  space is not grantable, on any path. Removal is not offered and cannot be:
+  every store that holds a space holds its key, and a key cannot be un-learned
+  — retiring a member's access means retiring the space.
+
 - **Accepting an id from outside is safe because an id is not what peers match
   on.** They intersect `BlindSpaceID(space_key, space_id)`, and the key is
   generated locally and never leaves the home, so two unrelated stores holding

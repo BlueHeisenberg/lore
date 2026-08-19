@@ -13,9 +13,9 @@
 // to mutate a member list — each of those would freeze an internal format
 // into a public contract.
 //
-// Init, CreateSpace, CreateSpaceWithID and Serve are here; device enrolment,
-// invites and join, backup and restore, and membership mutation are not, and
-// an embedder still reaches those by running the CLI.
+// Init, CreateSpace, CreateSpaceWithID, Serve and the two membership grant
+// calls are here; device enrolment, the invite and join handshakes, and backup
+// and restore are not, and an embedder still reaches those by running the CLI.
 //
 // Serve is the sync daemon, in this process. It is here for the same reason
 // the other two are: an embedder that had to run the `lore` binary to move an
@@ -36,6 +36,13 @@
 // and refuses to guess either, there is no get-or-create that lets a space
 // appear because a lookup missed, and the personal space belongs to Init
 // because there is exactly one.
+//
+// GrantMembership and AcceptMembership came last, from the same argument
+// applied to the one step that was left. They are not the invite handshake and
+// do not replace it: they are what remains of an admission once the part that
+// authenticates a stranger is removed, and they are only reachable by a caller
+// that already holds the owner's home or the grantee's. See grant.go, which
+// makes the whole argument and draws the line.
 //
 // CreateSpaceWithID came later, from that same argument carried one step
 // further. An embedder that mints a space id in a wizard and then has to make

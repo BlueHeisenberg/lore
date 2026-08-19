@@ -342,33 +342,43 @@ func (inv *Inviter) admit(req syncproto.JoinRequest) (string, int64, error) {
 		return "", 0, err
 	}
 
-	db, err := syncproto.OpenDB(filepath.Join(inv.home, "lore.db"))
-	if err != nil {
-		return "", 0, err
-	}
-	docs, err := syncproto.MemberDocs(db, inv.sp.SpaceID)
-	db.Close()
-	if err != nil {
-		return "", 0, err
-	}
-	rec := syncproto.SpaceRecord{
-		SpaceID: inv.sp.SpaceID, Kind: inv.sp.Kind, Name: inv.sp.Name,
-		ProjectRef: inv.sp.ProjectRef, SpaceKey: nil, // key travels only wrapped, inside the doc
-		CreatedAt: inv.sp.CreatedAt,
-	}
-	payload, err := json.Marshal(syncproto.InvitePayload{Space: rec, MemberDocs: docs, Role: inv.role})
-	if err != nil {
-		return "", 0, err
-	}
-	encPub, err := decodeKey32(req.EncPub)
-	if err != nil {
-		return "", 0, err
-	}
-	sealed, err := box.SealAnonymous(nil, payload, &encPub, rand.Reader)
+	sealed, err := sealInvitePayload(inv.home, inv.sp, inv.role, req.EncPub)
 	if err != nil {
 		return "", 0, err
 	}
 	return base64.StdEncoding.EncodeToString(sealed), next.Version, nil
+}
+
+// sealInvitePayload builds the {space row, member-doc chain, role} payload for
+// sp and seals it to encPub with box.SealAnonymous. It is the second half of
+// every admission — the LAN handshake's, the relay claim processor's and
+// Grant's — and it reads the member docs back out of the database rather than
+// taking the doc just written, because a joiner has to verify the whole chain
+// and only the database has all of it.
+func sealInvitePayload(home string, sp store.Space, role, encPub string) ([]byte, error) {
+	db, err := syncproto.OpenDB(filepath.Join(home, "lore.db"))
+	if err != nil {
+		return nil, err
+	}
+	docs, err := syncproto.MemberDocs(db, sp.SpaceID)
+	db.Close()
+	if err != nil {
+		return nil, err
+	}
+	rec := syncproto.SpaceRecord{
+		SpaceID: sp.SpaceID, Kind: sp.Kind, Name: sp.Name,
+		ProjectRef: sp.ProjectRef, SpaceKey: nil, // key travels only wrapped, inside the doc
+		CreatedAt: sp.CreatedAt,
+	}
+	payload, err := json.Marshal(syncproto.InvitePayload{Space: rec, MemberDocs: docs, Role: role})
+	if err != nil {
+		return nil, err
+	}
+	key, err := decodeKey32(encPub)
+	if err != nil {
+		return nil, err
+	}
+	return box.SealAnonymous(nil, payload, &key, rand.Reader)
 }
 
 func (inv *Inviter) finish(o inviteOutcome) {
