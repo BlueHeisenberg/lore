@@ -13,9 +13,9 @@
 // to mutate a member list — each of those would freeze an internal format
 // into a public contract.
 //
-// Init, CreateSpace and Serve are here; device enrolment, invites and join,
-// backup and restore, and membership mutation are not, and an embedder still
-// reaches those by running the CLI.
+// Init, CreateSpace, CreateSpaceWithID and Serve are here; device enrolment,
+// invites and join, backup and restore, and membership mutation are not, and
+// an embedder still reaches those by running the CLI.
 //
 // Serve is the sync daemon, in this process. It is here for the same reason
 // the other two are: an embedder that had to run the `lore` binary to move an
@@ -36,6 +36,15 @@
 // and refuses to guess either, there is no get-or-create that lets a space
 // appear because a lookup missed, and the personal space belongs to Init
 // because there is exactly one.
+//
+// CreateSpaceWithID came later, from that same argument carried one step
+// further. An embedder that mints a space id in a wizard and then has to make
+// the space in a store the wizard cannot reach — a container on its own
+// volume — was being asked to hold two ids for one space and to have a human
+// paste one over the other. So it may state the id. It is still not a
+// get-or-create by name: the id is identity, a name that matched creates
+// nothing, and the only thing that makes a second call a no-op is being
+// handed the same id again.
 //
 // # Stability
 //

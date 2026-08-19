@@ -66,6 +66,11 @@ var (
 	// already has. Nothing was created. It is a state conflict rather than a
 	// programming error — a space that arrived by sync can take a name — so
 	// it is worth branching on: ask the human for another name.
+	//
+	// CreateSpaceWithID returns it for the two conflicts an id can be in: the
+	// id is here already but as a space of another kind, or the name belongs
+	// to a different id. An id that is here as the same kind is that call's
+	// success, not this error.
 	ErrSpaceExists = errors.New("lore: a space with that name already exists")
 
 	// ErrSchemaTooNew: the database was written by a newer lore than this

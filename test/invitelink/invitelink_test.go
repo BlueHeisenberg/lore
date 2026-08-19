@@ -117,7 +117,7 @@ func createSharedSpace(t *testing.T, st *store.Store, account *keys.Account, nam
 	if err != nil {
 		t.Fatal(err)
 	}
-	sp, err := st.CreateSharedSpace(name, "", account.EncPub, signPriv)
+	sp, err := st.CreateSharedSpace("", name, "", account.EncPub, signPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
