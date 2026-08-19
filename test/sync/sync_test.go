@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BlueHeisenberg/lore"
 	"github.com/BlueHeisenberg/lore/internal/daemon"
 	"github.com/BlueHeisenberg/lore/internal/keys"
 	"github.com/BlueHeisenberg/lore/internal/space"
@@ -442,5 +443,129 @@ func TestTwoDeviceEnrollAndSync(t *testing.T) {
 			return errors.New("not yet tombstoned on A")
 		}
 		return nil
+	})
+}
+
+// TestOneSpaceIDInTwoUnrelatedStoresExchangesNothing is the safety argument
+// for lore.CreateSpaceWithID, run rather than asserted in prose.
+//
+// Accepting an id from a caller means two stores that never met can end up
+// holding "the same" space id — a setup wizard that writes one id into a
+// configuration file read by several machines makes it a certainty rather
+// than a 1-in-2^122 accident. The claim is that this is harmless because an
+// id is not what peers match on: they intersect blinded ids, HMAC(space_key,
+// "lore-blind" || space_id), and each store generated its own space key. Two
+// such stores must therefore be unable to see each other's space at all.
+//
+// The second half is the control. Give B the space row verbatim, key
+// included — which is what `lore join`, enrolment and restore each do — and
+// the intersection lights up immediately. So the first half is two live
+// daemons declining to recognise one another, not a test harness that was
+// never wired up.
+func TestOneSpaceIDInTwoUnrelatedStoresExchangesNothing(t *testing.T) {
+	homeA := filepath.Join(t.TempDir(), "a")
+	homeB := filepath.Join(t.TempDir(), "b")
+	initHome(t, homeA, "device-a")
+	initHome(t, homeB, "device-b")
+
+	// One id, two unrelated accounts, each creating it for itself. This is
+	// the isolated-household shape: the wizard minted the id, and the pod
+	// that will hold the space creates it at that id on first boot.
+	const shared = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	createAt := func(home, name string) store.Space {
+		t.Helper()
+		s, err := lore.Open(lore.Options{Home: home})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if _, err := s.CreateSpaceWithID(context.Background(), shared, name, lore.Shared); err != nil {
+			t.Fatal(err)
+		}
+		st := openStore(t, home)
+		sp, err := st.GetSpace(shared)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.PutEntry(store.PutParams{SpaceID: shared, Domain: "ops",
+			Title: name + "'s note", Body: "written in " + name + "'s own store"}); err != nil {
+			t.Fatal(err)
+		}
+		return sp
+	}
+	spA, spB := createAt(homeA, "david"), createAt(homeB, "jordan")
+
+	if string(spA.SpaceKey) == string(spB.SpaceKey) {
+		t.Fatal("two independent creations produced the same space key; the whole argument rests on them differing")
+	}
+	blindA := syncproto.BlindSpaceID(spA.SpaceKey, spA.SpaceID)
+	if blindB := syncproto.BlindSpaceID(spB.SpaceKey, spB.SpaceID); blindA == blindB {
+		t.Fatalf("one id in two stores produced one blinded id %s; they would intersect", blindA[:16])
+	}
+
+	dA := startDaemon(t, homeA)
+	dB := startDaemon(t, homeB)
+	if _, err := daemon.AddStaticPeer(homeA, fmt.Sprintf("127.0.0.1:%d", dB.Port())); err != nil {
+		t.Fatalf("A pins B: %v", err)
+	}
+	if _, err := daemon.AddStaticPeer(homeB, fmt.Sprintf("127.0.0.1:%d", dA.Port())); err != nil {
+		t.Fatalf("B pins A: %v", err)
+	}
+
+	// Rounds in both directions, and enough of them that "nothing crossed"
+	// is not "nothing has happened yet": each peer must have been reached.
+	waitFor(t, dA, 20*time.Second, "A to reach B at all", func() error {
+		for _, p := range adminStatus(t, dA).Peers {
+			if p.DeviceID == dB.DeviceID() && p.LastSeen != "" {
+				return nil
+			}
+		}
+		return errors.New("A has not completed a round against B yet")
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	dB.SyncNow(ctx)
+	dA.SyncNow(ctx)
+
+	stA, stB := openStore(t, homeA), openStore(t, homeB)
+	for _, tc := range []struct {
+		who string
+		st  *store.Store
+	}{{"A", stA}, {"B", stB}} {
+		n, err := tc.st.CountEntries(shared)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Errorf("%s holds %d entries in %s after syncing with a store that has the same id; want only its own",
+				tc.who, n, shared)
+		}
+	}
+	for _, p := range adminStatus(t, dA).Peers {
+		if p.DeviceID == dB.DeviceID() && len(p.SharedSpaces) != 0 {
+			t.Errorf("A reports sharing %v with B; one id and two keys must intersect in nothing", p.SharedSpaces)
+		}
+	}
+
+	// The control: the space row verbatim, exactly as join/enrolment/restore
+	// write it. Same id AND same key is what sharing a space means.
+	db, err := syncproto.OpenDB(filepath.Join(homeB, "lore.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := syncproto.InsertSpaceRecord(db, syncproto.SpaceRecord{
+		SpaceID: spA.SpaceID, Kind: spA.Kind, Name: spA.Name,
+		SpaceKey: spA.SpaceKey, CreatedAt: spA.CreatedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, dA, 20*time.Second, "the intersection to find the space once the key matches", func() error {
+		for _, p := range adminStatus(t, dA).Peers {
+			if p.DeviceID == dB.DeviceID() && len(p.SharedSpaces) == 1 && p.SharedSpaces[0] == shared {
+				return nil
+			}
+		}
+		return errors.New("not yet")
 	})
 }

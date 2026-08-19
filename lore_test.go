@@ -1099,3 +1099,134 @@ func TestInitKeepsAPreSeededConfig(t *testing.T) {
 		t.Errorf("config.json = %q, want %q", got, want)
 	}
 }
+
+// The id a caller supplies. Fixed rather than generated: a test that mints
+// its own id cannot notice a call that quietly minted a different one.
+const givenID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+
+func TestCreateSpaceWithIDCreatesAtThatIDAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	id, err := Init(home, "loretest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := open(t, home)
+
+	sp, err := s.CreateSpaceWithID(bg, givenID, "david", Shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp.ID != givenID {
+		t.Fatalf("created at %s, want the id it was given, %s", sp.ID, givenID)
+	}
+	if sp.Name != "david" || sp.Kind != Shared {
+		t.Errorf("got %+v, want name david kind shared", sp)
+	}
+	// It is a space this store can actually use: owned, writable, findable.
+	members, err := s.Members(bg, givenID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0].AccountID != id.AccountID || members[0].Role != Owner {
+		t.Fatalf("members = %+v, want one owner %s", members, id.AccountID)
+	}
+	if _, err := s.PutEntry(bg, PutParams{SpaceID: givenID, Domain: "ops", Title: "t", Body: "b"}); err != nil {
+		t.Errorf("write to the space: %v", err)
+	}
+
+	// Called again, as a pod does on every boot: the same space back, no
+	// second one, and the entry still there.
+	again, err := s.CreateSpaceWithID(bg, givenID, "david", Shared)
+	if err != nil {
+		t.Fatalf("second call must be a no-op, got %v", err)
+	}
+	if again != sp {
+		t.Errorf("second call returned %+v, want the existing %+v", again, sp)
+	}
+	if n, err := s.CountEntries(bg, givenID); err != nil || n != 1 {
+		t.Errorf("entries after the second call = %d, %v; want the one that was there", n, err)
+	}
+
+	// A different name for an id that is already here is not a rename and
+	// not an error: Space.Name is a local label, and the id is identity.
+	renamed, err := s.CreateSpaceWithID(bg, givenID, "david (renamed)", Shared)
+	if err != nil {
+		t.Fatalf("a different name for a known id must be accepted: %v", err)
+	}
+	if renamed.Name != "david" {
+		t.Errorf("name = %q; the call must not rename a space it did not create", renamed.Name)
+	}
+	sps, err := s.Spaces(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sps) != 2 {
+		t.Errorf("%d spaces after four calls; want personal + one", len(sps))
+	}
+}
+
+func TestCreateSpaceWithIDRefusals(t *testing.T) {
+	home := t.TempDir()
+	id, err := Init(home, "loretest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := open(t, home)
+	taken, err := s.CreateSpace(bg, "household", Shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const other = "6ba7b811-9dad-11d1-80b4-00c04fd430c8"
+	for _, tc := range []struct {
+		what string
+		id   string
+		name string
+		kind SpaceKind
+		want error
+	}{
+		{"no id", "", "david", Shared, ErrInvalidArgument},
+		{"not a uuid", "david", "david", Shared, ErrInvalidArgument},
+		{"uppercase uuid", strings.ToUpper(givenID), "david", Shared, ErrInvalidArgument},
+		{"braced uuid", "{" + givenID + "}", "david", Shared, ErrInvalidArgument},
+		{"urn uuid", "urn:uuid:" + givenID, "david", Shared, ErrInvalidArgument},
+		{"unhyphenated uuid", strings.ReplaceAll(givenID, "-", ""), "david", Shared, ErrInvalidArgument},
+		{"truncated uuid", givenID[:35], "david", Shared, ErrInvalidArgument},
+		{"no name", givenID, "", Shared, ErrInvalidArgument},
+		{"reserved name", givenID, "personal", Shared, ErrInvalidArgument},
+		{"personal kind", givenID, "david", Personal, ErrInvalidArgument},
+		// The kind of an id that is already here is not negotiable: the
+		// personal space rejects every foreign author, so handing it back
+		// where a shared space was asked for is handing back something the
+		// caller cannot use.
+		{"the personal space's id", id.PersonalSpaceID, "david", Shared, ErrSpaceExists},
+		// A name another space holds, under a new id: the household's
+		// memory has been pointed somewhere else and nobody said so.
+		{"a name another id holds", other, "household", Shared, ErrSpaceExists},
+	} {
+		if _, err := s.CreateSpaceWithID(bg, tc.id, tc.name, tc.kind); !errors.Is(err, tc.want) {
+			t.Errorf("%s: want %v, got %v", tc.what, tc.want, err)
+		}
+	}
+	// Every refusal wrote nothing: still the personal space and household.
+	sps, err := s.Spaces(bg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sps) != 2 {
+		t.Errorf("%d spaces after the refusals, want 2", len(sps))
+	}
+	if got, err := s.GetSpace(bg, taken.ID); err != nil || got.Name != "household" {
+		t.Errorf("the space that held the name was touched: %+v, %v", got, err)
+	}
+
+	ro := open(t, home, func(o *Options) { o.ReadOnly = true })
+	if _, err := ro.CreateSpaceWithID(bg, givenID, "david", Shared); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("read-only store: want ErrReadOnly, got %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateSpaceWithID(bg, givenID, "david", Shared); !errors.Is(err, ErrClosed) {
+		t.Errorf("closed store: want ErrClosed, got %v", err)
+	}
+}

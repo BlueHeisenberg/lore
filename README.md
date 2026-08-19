@@ -47,6 +47,11 @@ if err != nil {
 defer st.Close()
 
 sp, err := st.CreateSpace(ctx, "household", lore.Shared) // returns the id
+
+// Or, when the id was decided before this store existed — a wizard wrote it
+// into a config file and this process boots later. Idempotent: safe on every
+// boot, and the second call returns the space that is already there.
+sp, err = st.CreateSpaceWithID(ctx, cfg.SpaceID, "household", lore.Shared)
 hits, err := st.Search(ctx, "canary deploy", lore.SearchOpts{Spaces: []string{sp.ID}})
 
 // Sync with the other homes that hold this space, in this process. Blocks

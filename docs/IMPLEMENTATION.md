@@ -268,7 +268,7 @@ discipline cannot: it is a compile error to publish `Space.SpaceKey` (a raw
 `OriginDevice`. Re-exporting the internal structs would have made every one of
 those a promise.
 
-**Surface** (22 methods, 5 package functions):
+**Surface** (23 methods, 5 package functions):
 
 ```
 Open(Options) (*Store, error) · Init(home, deviceName string) (Identity, error)
@@ -277,7 +277,8 @@ DefaultHome() · NormalizeMarkers([]string) · Terms(string)
 (*Store) Close/AccountID/DeviceID/Home
 entries  PutEntry · GetEntry · GetEntryIn · DeleteEntry · ListEntries · CountEntries · GetDomain · CopyEntry
 search   Search
-spaces   CreateSpace · Spaces · GetSpace · SpaceByName · PersonalSpace · Members · CanWrite · Links
+spaces   CreateSpace · CreateSpaceWithID · Spaces · GetSpace · SpaceByName · PersonalSpace
+         Members · CanWrite · Links
 sync     Serve(ctx, ServeOptions) — blocks until ctx is cancelled; reports readiness
          and its ephemeral ports through ServeOptions.Ready(ServeInfo)
 ```
@@ -337,6 +338,28 @@ sync     Serve(ctx, ServeOptions) — blocks until ctx is cancelled; reports rea
   `CreateSpace` takes a name and a kind and guesses neither, there is no
   get-or-create, a duplicate name is `ErrSpaceExists` rather than a silent
   second space, and the personal space belongs to `Init` because there is one.
+- **`CreateSpaceWithID` creates a shared space at an id the caller already
+  holds, idempotently.** It is for the embedder whose id is decided before the
+  store exists: a setup wizard writes the id into a configuration file, and the
+  process that will actually hold the space — a container on a volume nothing
+  outside it can reach — boots later. Without it that process mints a second id
+  and a human pastes it back over the first. A second call with the same id
+  returns the existing space and writes nothing, which is what lets a pod call
+  it unconditionally on every boot; `name` is not compared (a display name is
+  never identity) and nothing is renamed, while the *kind* is compared and a
+  mismatch is `ErrSpaceExists`, because a personal space rejects every foreign
+  author and is not a substitute for the shared one that was asked for. The id
+  must be canonical UUID text and is refused, never coerced — a primary key
+  with two spellings is two rows.
+- **Accepting an id from outside is safe because an id is not what peers match
+  on.** They intersect `BlindSpaceID(space_key, space_id)`, and the key is
+  generated locally and never leaves the home, so two unrelated stores holding
+  one id compute different blinded ids and recognise nothing of each other
+  (`test/sync`'s `TestOneSpaceIDInTwoUnrelatedStoresExchangesNothing`, which
+  proves it by then handing over the key and watching the intersection light
+  up). The corollary is a rule for callers: do not create a space at an id you
+  also expect to be invited into, because join, enrolment and restore all write
+  a space row verbatim and would overwrite the local key.
 - **`Serve` runs the sync daemon in the caller's process, on the caller's
   store.** Nothing else carries an entry from one home to another: a write is
   local, `NotifyOnWrite` only pokes a daemon that already exists, and until

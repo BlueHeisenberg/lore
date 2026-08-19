@@ -54,7 +54,7 @@ func createSharedSpace(st *store.Store, account *keys.Account, name, projectRef 
 	if err != nil {
 		return store.Space{}, err
 	}
-	return st.CreateSharedSpace(name, projectRef, account.EncPub, signPriv)
+	return st.CreateSharedSpace("", name, projectRef, account.EncPub, signPriv)
 }
 
 func cmdSpaceCreate(args []string) error {

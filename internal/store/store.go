@@ -231,10 +231,18 @@ func (s *Store) CreateSpace(kind, name, projectRef string, key []byte) (Space, e
 // previous doc) and everyone who holds it may write to it — so a half-applied
 // creation is worse than no creation at all.
 //
+// spaceID is the id to create the space at, or "" to mint one. A caller that
+// supplies one has it from somewhere the space does not exist yet — a wizard
+// that wrote it into a configuration file before the store existed — and the
+// space_key is still fresh and local, which is what keeps two stores that
+// happen to hold one id from ever recognising each other on the wire (see
+// syncproto.BlindSpaceID). A duplicate is the spaces table's primary key
+// error; this function does not look first.
+//
 // accountEncPub and accountPriv are the account's X25519 encryption pubkey and
 // its Ed25519 signing key. The owner is the signer's account, so a store can
 // only create a space it owns; without a signer this is ErrNoSigner.
-func (s *Store) CreateSharedSpace(name, projectRef, accountEncPub string, accountPriv ed25519.PrivateKey) (Space, error) {
+func (s *Store) CreateSharedSpace(spaceID, name, projectRef, accountEncPub string, accountPriv ed25519.PrivateKey) (Space, error) {
 	if s.signer == nil {
 		return Space{}, ErrNoSigner
 	}
@@ -246,8 +254,11 @@ func (s *Store) CreateSharedSpace(name, projectRef, accountEncPub string, accoun
 	if err != nil {
 		return Space{}, err
 	}
+	if spaceID == "" {
+		spaceID = uuid.NewString()
+	}
 	sp := Space{
-		SpaceID:    uuid.NewString(),
+		SpaceID:    spaceID,
 		Kind:       "shared",
 		Name:       name,
 		ProjectRef: projectRef,

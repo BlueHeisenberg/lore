@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/BlueHeisenberg/lore/internal/keys"
 	"github.com/BlueHeisenberg/lore/internal/space"
 	"github.com/BlueHeisenberg/lore/internal/store"
@@ -143,11 +145,132 @@ func (s *Store) CreateSpace(ctx context.Context, name string, kind SpaceKind) (S
 	if err != nil {
 		return Space{}, err
 	}
-	sp, err := s.st.CreateSharedSpace(name, "", account.EncPub, priv)
+	sp, err := s.st.CreateSharedSpace("", name, "", account.EncPub, priv)
 	if err != nil {
 		return Space{}, wrap(err)
 	}
 	return spaceOf(sp), nil
+}
+
+// CreateSpaceWithID creates a shared space at an id the caller already holds,
+// and returns the existing one unchanged when that id is already here.
+//
+// It is CreateSpace for the caller that decided the id first. The case it
+// exists for is a store that does not exist yet when the id is chosen: a
+// setup wizard mints an id, writes it into a configuration file, and the
+// process that will actually hold the space — a container on a volume nothing
+// outside it can reach — boots later and has to arrive at that id rather than
+// mint a second one and ask a human to copy it back.
+//
+// # Idempotent, so a caller may call it on every boot
+//
+// A second call with an id this store already holds writes nothing and
+// returns the space that is there. That is the whole point: the caller does
+// not have to know whether this is a first boot, and there is no state to
+// keep to find out. name is not compared, because Space.Name is a local
+// display name and never identity — an id that is already here is the space
+// the caller asked for, whatever either of them calls it. Nothing is renamed
+// either: this call does not exist to edit a space it did not create.
+//
+// The kind IS compared. A space's kind decides whether it can hold another
+// account's writes at all — a personal space rejects every foreign author, on
+// every path, forever — so returning one where a shared space was asked for
+// would hand back something the caller cannot use for what it asked. That is
+// ErrSpaceExists.
+//
+// # What it refuses
+//
+// A malformed id is ErrInvalidArgument and is never coerced into a valid one.
+// The id must be a UUID in canonical text — 36 characters, lowercase hex,
+// four hyphens, no braces and no urn: prefix — because it is a primary key
+// and two spellings of one UUID are two rows.
+//
+// A name another space in this store already holds is ErrSpaceExists, exactly
+// as in CreateSpace, unless that other space IS this id. A caller whose id
+// changed but whose name did not is a configuration that has moved a member's
+// memory somewhere else, and it is worth stopping on.
+//
+// kind must be Shared and name may not be "personal": the personal space is
+// Init's, one per home, and it is not something a caller may add a second of
+// under an id of its choosing.
+//
+// A read-only store cannot own anything: ErrReadOnly.
+//
+// # On accepting an id from outside
+//
+// Space ids are global in lore's model, so it is fair to ask what a caller
+// could do by choosing one. The answer is nothing, and the reason is that an
+// id is not what two stores match on. Peers intersect blinded ids —
+// HMAC(space_key, "lore-blind" || space_id) — and the space key here is
+// freshly generated and never leaves this home. Two unrelated stores that
+// create "the same" space id therefore compute different blinded ids, never
+// recognise each other's space, and exchange nothing; the id alone carries no
+// authority, and a space still arrives from someone else only through the
+// invite and join handshake, where the key travels wrapped to a member.
+//
+// What a shared id does NOT survive is that handshake: joining a space whose
+// id this store already holds overwrites the local row, key included, because
+// enrolment and restore must reproduce a space verbatim. So do not create a
+// space at an id you also expect to be invited into. For a space that lives
+// in one store and is shared with nobody — which is the case this call was
+// added for — there is no such handshake and nothing to collide with.
+func (s *Store) CreateSpaceWithID(ctx context.Context, id, name string, kind SpaceKind) (Space, error) {
+	if err := validSpaceID(id); err != nil {
+		return Space{}, err
+	}
+	switch {
+	case name == "":
+		return Space{}, invalid("name is required")
+	case name == "personal":
+		return Space{}, invalid(`the name "personal" is reserved for the personal space`)
+	case kind != Shared:
+		return Space{}, invalid("kind must be %q; the personal space is created by Init", Shared)
+	}
+	// This lookup is also the closed-store and context check: it runs before
+	// anything is written and reports both.
+	switch existing, err := s.GetSpace(ctx, id); {
+	case err == nil:
+		if existing.Kind != kind {
+			return Space{}, fmt.Errorf("%w: %s is already a %s space here", ErrSpaceExists, id, existing.Kind)
+		}
+		return existing, nil
+	case !errors.Is(err, ErrSpaceNotFound):
+		return Space{}, err
+	}
+	switch other, err := s.SpaceByName(ctx, name); {
+	case err == nil:
+		return Space{}, fmt.Errorf("%w: %q is space %s, not %s", ErrSpaceExists, name, other.ID, id)
+	case !errors.Is(err, ErrSpaceNotFound):
+		return Space{}, err
+	}
+	// Loaded here and held nowhere, for the reason CreateSpace gives.
+	account, err := keys.LoadAccount(s.home)
+	if err != nil {
+		return Space{}, err
+	}
+	priv, err := account.SigningKey()
+	if err != nil {
+		return Space{}, err
+	}
+	sp, err := s.st.CreateSharedSpace(id, name, "", account.EncPub, priv)
+	if err != nil {
+		return Space{}, wrap(err)
+	}
+	return spaceOf(sp), nil
+}
+
+// validSpaceID accepts a UUID in canonical text and nothing else. uuid.Parse
+// alone is not the check: it also reads braced, urn: and unhyphenated forms,
+// and each of those would insert a second row for one UUID.
+func validSpaceID(id string) error {
+	if id == "" {
+		return invalid("id is required")
+	}
+	u, err := uuid.Parse(id)
+	if err != nil || u.String() != id {
+		return invalid("id must be a UUID in canonical form (lowercase, hyphenated, no braces): %q", id)
+	}
+	return nil
 }
 
 // GetSpace returns a space by id, or ErrSpaceNotFound.
