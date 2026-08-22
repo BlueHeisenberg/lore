@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
+     role="img" aria-label="lore — the same knowledge entry held in two places at once">
+  <title>lore</title>
+
+  <!--
+    Knowledge kept, and the same knowledge somewhere else. Two cards of the
+    same entry, offset: the one behind is the copy on another machine, the one
+    in front is the one you are reading. The lit line is the entry both hold.
+    Designed for a dark ground; the tile carries its own, so it reads on a
+    light page too.
+  -->
+
+  <defs>
+    <pattern id="lm-grid" width="8" height="8" patternUnits="userSpaceOnUse">
+      <path d="M8 0 L0 0 0 8" fill="none" stroke="#1A1A1A" stroke-width="1"/>
+    </pattern>
+    <radialGradient id="lm-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#E8C674" stop-opacity="0.40"/>
+      <stop offset="55%"  stop-color="#E8C674" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#E8C674" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="13" fill="#0A0908"/>
+  <rect width="64" height="64" rx="13" fill="url(#lm-grid)" opacity="0.55"/>
+  <circle cx="32" cy="32" r="22" fill="url(#lm-glow)"/>
+
+  <!-- The copy, behind and offset. Same shape, quieter. -->
+  <rect x="21" y="10" width="32" height="40" rx="3"
+        fill="#0A0908" stroke="#E8E6E1" stroke-width="2.6" opacity="0.42"/>
+
+  <!-- The one in front. -->
+  <rect x="11" y="16" width="32" height="40" rx="3"
+        fill="#0A0908" stroke="#E8E6E1" stroke-width="3"/>
+
+  <!-- Its lines. The first is lit: the entry the two of them share. -->
+  <g stroke-linecap="round">
+    <path d="M18 26 H36" stroke="#E8C674" stroke-width="3.4"/>
+    <path d="M18 35 H36" stroke="#E8E6E1" stroke-width="2.6" opacity="0.62"/>
+    <path d="M18 44 H30" stroke="#E8E6E1" stroke-width="2.6" opacity="0.62"/>
+  </g>
+</svg>

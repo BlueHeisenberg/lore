@@ -1,0 +1,52 @@
+# Publishes site/ to GitHub Pages.
+#
+# This needs one repository setting, once, by hand:
+#   Settings -> Pages -> Build and deployment -> Source: "GitHub Actions"
+# Without it every run fails at the deploy step with "Pages site not found".
+#
+# Only site/ is uploaded, so docs/ stays engineering documentation rather than
+# becoming a published web page nobody proofread for a public audience.
+#
+# The page ships no root-absolute references, so it works unchanged at
+# https://blueheisenberg.github.io/lore/ and at any custom domain added later.
+# There is deliberately no site/CNAME here: adding one is what sets the custom
+# domain, and it must not land before the DNS records exist.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel a deploy half-done; queue instead.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build and deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Upload site/
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v5
