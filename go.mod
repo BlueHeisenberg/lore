@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.20.1
 	golang.org/x/crypto v0.51.0
+	golang.org/x/sys v0.44.0
 	modernc.org/sqlite v1.38.0
 )
 
@@ -23,7 +24,6 @@ require (
 	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
 	modernc.org/libc v1.65.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

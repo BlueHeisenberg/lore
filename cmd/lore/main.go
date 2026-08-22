@@ -170,6 +170,7 @@ func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	name := fs.String("name", "", "device name (default: hostname)")
 	yes := fs.Bool("yes-i-saved-it", false, "skip the recovery-code confirmation prompt (automation)")
+	noPath := fs.Bool("no-path", false, "skip adding lore's directory to your PATH")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -192,6 +193,13 @@ func cmdInit(args []string) error {
 			keys.NormalizeRecoveryCode(line) != keys.NormalizeRecoveryCode(id.RecoveryCode) {
 			return fmt.Errorf("recovery code not confirmed — %s IS initialized; "+
 				"run `lore recovery new` to mint another code and confirm that one", home)
+		}
+	}
+	if !*noPath {
+		// A store nobody can invoke is half an install — but the store is the
+		// half that matters, so a PATH failure warns and init still succeeds.
+		if err := ensureOnPath(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not add lore to your PATH: %v\n", err)
 		}
 	}
 	fmt.Printf("ok: initialized %s\n", home)

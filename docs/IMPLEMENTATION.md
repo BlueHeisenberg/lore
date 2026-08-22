@@ -155,7 +155,8 @@ LWW: an incoming entry version wins iff (updated_at, author_account) > local's, 
 ## CLI surface (cmd/lore)
 
 ```
-lore init [--name]                 create account+device+personal space (lore.Init), print recovery code (re-type to confirm AFTER creation; --yes-i-saved-it for tests)
+lore init [--name]                 create account+device+personal space (lore.Init), print recovery code (re-type to confirm AFTER creation; --yes-i-saved-it for tests); also self-registers on PATH unless --no-path
+lore path                          put the running binary's directory on the user PATH (idempotent; HKCU\Environment on Windows, ~/.local/bin symlink on Unix)
 lore put --domain d --title t [--space s] [--markers ..] [--confidence ..] [--origin ..] [-|--body-file]
 lore get <entry-id|domain>         print entry/domain
 lore search <query> [--space|--scope|--domain|--marker|--confidence]
